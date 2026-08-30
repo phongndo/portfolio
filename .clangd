@@ -1,0 +1,9 @@
+CompileFlags:
+  CompilationDatabase: build/native-debug
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - bugprone-*
+      - performance-*
+      - portability-*
