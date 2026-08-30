@@ -11,7 +11,7 @@ namespace {
 constexpr auto canvas = "#background";
 
 void draw() {
-  glClearColor(0.035F, 0.039F, 0.043F, 1.0F);
+  glClearColor(0.031F, 0.031F, 0.031F, 1.0F);
   glClear(GL_COLOR_BUFFER_BIT);
 }
 
