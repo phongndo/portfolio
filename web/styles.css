@@ -54,6 +54,12 @@ section + section {
   margin-top: 2.75rem;
 }
 
+.about p {
+  max-width: 38rem;
+  margin: 0;
+  line-height: 1.65;
+}
+
 h1,
 h2 {
   margin: 0 0 1.4rem;
