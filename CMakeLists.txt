@@ -19,15 +19,52 @@ target_compile_options(
 if(EMSCRIPTEN)
   set(SITE_DIR "${CMAKE_BINARY_DIR}/site")
 
-  set_target_properties(portfolio PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${SITE_DIR}" SUFFIX ".js")
+  execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    OUTPUT_VARIABLE ASSET_VERSION
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
+  )
+  if(NOT ASSET_VERSION)
+    set(ASSET_VERSION dev)
+  endif()
 
-  target_link_options(
-    portfolio PRIVATE "SHELL:-sENVIRONMENT=web" "SHELL:-sFILESYSTEM=0"
-    "SHELL:-sMIN_WEBGL_VERSION=2" "SHELL:-sMAX_WEBGL_VERSION=2"
+  set(BUNDLE_NAME "portfolio.${ASSET_VERSION}")
+  set(STYLE_NAME "styles.${ASSET_VERSION}.css")
+
+  set_target_properties(
+    portfolio
+    PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${SITE_DIR}"
+               OUTPUT_NAME "${BUNDLE_NAME}"
+               SUFFIX ".js"
   )
 
-  set(WEB_ASSETS index.html styles.css)
-  foreach(web_asset IN LISTS WEB_ASSETS)
-    configure_file("${PROJECT_SOURCE_DIR}/web/${web_asset}" "${SITE_DIR}/${web_asset}" COPYONLY)
-  endforeach()
+  target_compile_options(portfolio PRIVATE -Oz -flto)
+  target_link_options(
+    portfolio
+    PRIVATE
+    -Oz
+    -flto
+    "SHELL:--closure 1"
+    "SHELL:-sINCOMING_MODULE_JS_API=[]"
+    "SHELL:-sENVIRONMENT=web"
+    "SHELL:-sFILESYSTEM=0"
+    "SHELL:-sMALLOC=emmalloc"
+    "SHELL:-sEXIT_RUNTIME=0"
+    "SHELL:-sALLOW_MEMORY_GROWTH=0"
+    "SHELL:-sMIN_WEBGL_VERSION=2"
+    "SHELL:-sMAX_WEBGL_VERSION=2"
+  )
+
+  file(GLOB STALE_ASSETS "${SITE_DIR}/portfolio*" "${SITE_DIR}/styles*")
+  list(REMOVE_ITEM STALE_ASSETS "${SITE_DIR}/${BUNDLE_NAME}.js" "${SITE_DIR}/${BUNDLE_NAME}.wasm"
+       "${SITE_DIR}/${STYLE_NAME}"
+  )
+  if(STALE_ASSETS)
+    file(REMOVE ${STALE_ASSETS})
+  endif()
+
+  configure_file("${PROJECT_SOURCE_DIR}/web/index.html" "${SITE_DIR}/index.html" @ONLY)
+  configure_file("${PROJECT_SOURCE_DIR}/web/styles.css" "${SITE_DIR}/${STYLE_NAME}" COPYONLY)
+  configure_file("${PROJECT_SOURCE_DIR}/web/_headers" "${SITE_DIR}/_headers" @ONLY)
 endif()

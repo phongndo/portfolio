@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
     <title>Phong N Do</title>
-    <link rel="stylesheet" href="styles.css" />
-    <script src="portfolio.js" defer></script>
+    <link rel="stylesheet" href="@STYLE_NAME@" />
+    <link rel="preload" href="@BUNDLE_NAME@.wasm" as="fetch" type="application/wasm" crossorigin />
+    <script src="@BUNDLE_NAME@.js" defer></script>
   </head>
   <body>
     <canvas id="background" aria-hidden="true"></canvas>

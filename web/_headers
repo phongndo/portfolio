@@ -1,0 +1,8 @@
+/portfolio.*
+  Cache-Control: public, max-age=31536000, immutable
+
+/styles.*
+  Cache-Control: public, max-age=31536000, immutable
+
+/
+  Link: </@BUNDLE_NAME@.wasm>; rel=preload; as=fetch; type=application/wasm; crossorigin
