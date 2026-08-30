@@ -72,16 +72,22 @@ ul {
   list-style: none;
 }
 
+li {
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
 li + li {
   margin-top: 0.65rem;
 }
 
 a {
-  width: fit-content;
   color: inherit;
   text-decoration-color: rgb(232 232 228 / 24%);
   text-underline-offset: 0.2em;
-  transition: color 120ms ease;
+  transition:
+    color 120ms ease,
+    text-decoration-color 120ms ease;
 }
 
 a:hover {
