@@ -29,6 +29,8 @@
               emscripten
               conan
               just
+              watchexec
+              browser-sync
               nixfmt
               statix
               deadnix

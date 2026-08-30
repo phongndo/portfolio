@@ -3,7 +3,7 @@
 ```sh
 nix develop
 just setup
-just serve
+just watch
 ```
 
 ```sh
