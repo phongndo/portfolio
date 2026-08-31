@@ -10,3 +10,7 @@ just watch
 just fmt
 just check
 ```
+
+## License
+
+Copyright © 2026 Phong N Do. All rights reserved. See [LICENSE](LICENSE).

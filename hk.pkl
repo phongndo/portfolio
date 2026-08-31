@@ -15,7 +15,7 @@ local project = new Mapping<String, Step> {
       ".github/**/*.yml",
       "web/**/*.html",
       "web/**/*.css",
-      ".prettierrc.json",
+      ".oxfmtrc.json",
       ".stylelintrc.json",
     )
     exclusive = true

@@ -36,7 +36,7 @@
               nixfmt
               statix
               deadnix
-              prettier
+              oxfmt
               htmlhint
               stylelint
               actionlint
