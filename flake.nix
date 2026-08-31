@@ -29,6 +29,7 @@
               emscripten
               conan
               just
+              hk
               wrangler
               watchexec
               browser-sync

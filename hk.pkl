@@ -1,0 +1,39 @@
+amends "package://github.com/jdx/hk/releases/download/v1.56.0/hk@1.56.0#/Config.pkl"
+
+local project = new Mapping<String, Step> {
+  ["project"] {
+    check = "nix develop --command just check"
+    fix = "nix develop --command just fmt && nix develop --command just check"
+    stage = List(
+      "justfile",
+      "src/**/*.cpp",
+      "src/**/*.hpp",
+      "CMakeLists.txt",
+      "flake.nix",
+      "CMakePresets.json",
+      "vercel.json",
+      ".github/**/*.yml",
+      "web/**/*.html",
+      "web/**/*.css",
+      ".prettierrc.json",
+      ".stylelintrc.json",
+    )
+    exclusive = true
+  }
+}
+
+hooks {
+  ["pre-commit"] {
+    fix = true
+    stash = "git"
+    steps = project
+  }
+  ["check"] {
+    steps = project
+  }
+  ["fix"] {
+    fix = true
+    stage = false
+    steps = project
+  }
+}

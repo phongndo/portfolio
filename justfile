@@ -3,7 +3,10 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-setup: configure-native configure-web
+setup: hooks configure-native configure-web
+
+hooks:
+    hk install
 
 configure-native:
     cmake --preset native-debug
@@ -102,6 +105,7 @@ lint: configure-native configure-web
     htmlhint 'web/**/*.html'
     stylelint 'web/**/*.css'
     actionlint
+    hk validate
 
 flake-check:
     nix flake check

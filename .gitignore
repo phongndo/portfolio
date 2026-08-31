@@ -1,5 +1,6 @@
 .direnv/
 .wrangler/
+hk.local.pkl
 build/
 dist/
 CMakeUserPresets.json
