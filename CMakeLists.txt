@@ -33,6 +33,8 @@ if(EMSCRIPTEN)
 
   set(BUNDLE_NAME "portfolio.${ASSET_VERSION}")
   set(STYLE_NAME "styles.${ASSET_VERSION}.css")
+  set(FAVICON_SVG_NAME "favicon.${ASSET_VERSION}.svg")
+  set(FAVICON_PNG_NAME "favicon.${ASSET_VERSION}.png")
 
   set_target_properties(
     portfolio
@@ -58,9 +60,15 @@ if(EMSCRIPTEN)
     "SHELL:-sMAX_WEBGL_VERSION=2"
   )
 
-  file(GLOB STALE_ASSETS "${SITE_DIR}/portfolio*" "${SITE_DIR}/styles*")
-  list(REMOVE_ITEM STALE_ASSETS "${SITE_DIR}/${BUNDLE_NAME}.js" "${SITE_DIR}/${BUNDLE_NAME}.wasm"
-       "${SITE_DIR}/${STYLE_NAME}"
+  file(GLOB STALE_ASSETS "${SITE_DIR}/portfolio*" "${SITE_DIR}/styles*" "${SITE_DIR}/favicon*")
+  list(
+    REMOVE_ITEM
+    STALE_ASSETS
+    "${SITE_DIR}/${BUNDLE_NAME}.js"
+    "${SITE_DIR}/${BUNDLE_NAME}.wasm"
+    "${SITE_DIR}/${STYLE_NAME}"
+    "${SITE_DIR}/${FAVICON_SVG_NAME}"
+    "${SITE_DIR}/${FAVICON_PNG_NAME}"
   )
   if(STALE_ASSETS)
     file(REMOVE ${STALE_ASSETS})
@@ -68,5 +76,7 @@ if(EMSCRIPTEN)
 
   configure_file("${PROJECT_SOURCE_DIR}/web/index.html" "${SITE_DIR}/index.html" @ONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/styles.css" "${SITE_DIR}/${STYLE_NAME}" COPYONLY)
+  configure_file("${PROJECT_SOURCE_DIR}/web/favicon.svg" "${SITE_DIR}/${FAVICON_SVG_NAME}" COPYONLY)
+  configure_file("${PROJECT_SOURCE_DIR}/web/favicon.png" "${SITE_DIR}/${FAVICON_PNG_NAME}" COPYONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/_headers" "${SITE_DIR}/_headers" @ONLY)
 endif()
