@@ -73,6 +73,7 @@ lint: configure-native configure-web
 
     clang-tidy --quiet -p build/native-debug src/main.cpp
 
+    em++ -x c++ -E /dev/null -o /dev/null
     sysroot="$(em-config CACHE)/sysroot"
     resource_dir="$(em++ -print-resource-dir)"
     clang_tidy_dir="$(dirname "$(command -v clang-tidy)")"
