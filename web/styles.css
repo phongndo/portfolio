@@ -26,6 +26,7 @@ body {
 
 #background {
   position: fixed;
+  z-index: 0;
   inset: 5px;
   width: calc(100% - 10px);
   height: calc(100% - 10px);
@@ -35,6 +36,7 @@ body {
 
 .frame {
   position: relative;
+  z-index: 1;
   min-height: calc(100svh - 8px);
   padding: clamp(2rem, 2.7vw, 3.5rem);
   overflow: hidden;

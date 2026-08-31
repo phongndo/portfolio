@@ -20,8 +20,8 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              llvmPackages.clang
-              llvmPackages.clang-tools
+              llvmPackages_22.clang
+              llvmPackages_22.clang-tools
               cmake
               cmake-format
               ninja
@@ -45,9 +45,9 @@
             ];
 
             shellHook = ''
-              export PATH="${pkgs.llvmPackages.clang-tools}/bin:${pkgs.llvmPackages.clang}/bin:$PATH"
-              export CC="${pkgs.llvmPackages.clang}/bin/clang"
-              export CXX="${pkgs.llvmPackages.clang}/bin/clang++"
+              export PATH="${pkgs.llvmPackages_22.clang-tools}/bin:${pkgs.llvmPackages_22.clang}/bin:$PATH"
+              export CC="${pkgs.llvmPackages_22.clang}/bin/clang"
+              export CXX="${pkgs.llvmPackages_22.clang}/bin/clang++"
               export CMAKE_GENERATOR=Ninja
               export EMSCRIPTEN_ROOT="${pkgs.emscripten}/share/emscripten"
               export EM_CACHE="''${XDG_CACHE_HOME:-$HOME/.cache}/emscripten"

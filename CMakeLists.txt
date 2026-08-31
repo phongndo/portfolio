@@ -17,6 +17,8 @@ target_compile_options(
 )
 
 if(EMSCRIPTEN)
+  target_sources(portfolio PRIVATE src/renderer.cpp)
+
   set(SITE_DIR "${CMAKE_BINARY_DIR}/site")
 
   execute_process(

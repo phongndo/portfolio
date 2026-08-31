@@ -67,8 +67,27 @@ fmt-check:
     nixfmt --check flake.nix
     prettier --check CMakePresets.json '.github/**/*.yml' 'web/**/*.{html,css}' .prettierrc.json .stylelintrc.json
 
-lint: configure-native
-    clang-tidy -p build/native-debug src/main.cpp
+lint: configure-native configure-web
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    clang-tidy --quiet -p build/native-debug src/main.cpp
+
+    sysroot="$(em-config CACHE)/sysroot"
+    resource_dir="$(em++ -print-resource-dir)"
+    clang-tidy --quiet src/renderer.cpp -- \
+      -target wasm32-unknown-emscripten \
+      -std=c++23 \
+      -isysroot "$sysroot" \
+      -resource-dir "$resource_dir" \
+      -isystem "$sysroot/include/wasm32-emscripten/c++/v1" \
+      -isystem "$sysroot/include/c++/v1" \
+      -isystem "$resource_dir/include" \
+      -isystem "$sysroot/include/wasm32-emscripten" \
+      -isystem "$sysroot/include" \
+      -iwithsysroot/include/fakesdl \
+      -iwithsysroot/include/compat
+
     cmake-lint CMakeLists.txt
     statix check flake.nix
     deadnix --fail flake.nix
