@@ -75,7 +75,7 @@ lint: configure-native configure-web
 
     sysroot="$(em-config CACHE)/sysroot"
     resource_dir="$(em++ -print-resource-dir)"
-    clang-tidy --quiet src/renderer.cpp -- \
+    env -u NIX_CFLAGS_COMPILE clang-tidy --quiet src/renderer.cpp -- \
       -target wasm32-unknown-emscripten \
       -std=c++23 \
       -nostdinc \
