@@ -19,6 +19,7 @@ constexpr double maximum_device_pixel_ratio = 2.0;
 constexpr double maximum_canvas_dimension = 8192.0;
 constexpr double maximum_pixel_count = 5'000'000.0;
 constexpr double maximum_frame_step = 0.1;
+constexpr int resize_settle_delay_milliseconds = 160;
 constexpr float maximum_integration_step = 1.0F / 60.0F;
 constexpr std::uint32_t fallback_random_state = 0x6D2B79F5U;
 constexpr std::uint8_t maximum_center_count = 7U;
@@ -880,11 +881,29 @@ private:
 
   static EM_BOOL on_resize(int, const EmscriptenUiEvent *, void *user_data) {
     auto &renderer = *static_cast<Renderer *>(user_data);
+    renderer.resize_after_timestamp_ =
+        emscripten_get_now() + static_cast<double>(resize_settle_delay_milliseconds);
+    if (!renderer.resize_scheduled_) {
+      renderer.resize_scheduled_ = true;
+      emscripten_async_call(on_deferred_resize, &renderer, resize_settle_delay_milliseconds);
+    }
+    return EM_TRUE;
+  }
+
+  static void on_deferred_resize(void *user_data) {
+    auto &renderer = *static_cast<Renderer *>(user_data);
+    const auto remaining = renderer.resize_after_timestamp_ - emscripten_get_now();
+    if (remaining > 0.0) {
+      const auto delay = std::max(1, static_cast<int>(std::ceil(remaining)));
+      emscripten_async_call(on_deferred_resize, &renderer, delay);
+      return;
+    }
+
+    renderer.resize_scheduled_ = false;
     if (renderer.resize() == ResizeResult::applied &&
         renderer.motion_mode_ == MotionMode::reduced) {
       renderer.pipeline_.draw(renderer.dynamics_);
     }
-    return EM_TRUE;
   }
 
   WebGlContext context_;
@@ -893,6 +912,8 @@ private:
   CanvasExtent extent_;
   MotionMode motion_mode_;
   double last_animation_timestamp_{};
+  double resize_after_timestamp_{};
+  bool resize_scheduled_{};
 };
 
 } // namespace
