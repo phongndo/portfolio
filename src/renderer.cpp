@@ -21,7 +21,7 @@ constexpr double maximum_pixel_count = 5'000'000.0;
 constexpr double maximum_frame_step = 0.1;
 constexpr float maximum_integration_step = 1.0F / 60.0F;
 constexpr std::uint32_t fallback_random_state = 0x6D2B79F5U;
-constexpr std::size_t maximum_center_count = 7;
+constexpr std::uint8_t maximum_center_count = 7U;
 constexpr float placement_left = 0.32F;
 constexpr float placement_right = 0.92F;
 constexpr float placement_top = 0.08F;
@@ -167,6 +167,12 @@ struct ScalarMotion final {
   SmoothNoise noise{};
 };
 
+struct NoiseRequest final {
+  float minimum_time;
+  float maximum_time;
+  std::size_t channel;
+};
+
 struct Singularity final {
   NormalizedPoint position{};
   NormalizedPoint velocity{};
@@ -206,8 +212,12 @@ public:
           .x = random.range(-0.0035F, 0.0035F),
           .y = random.range(-0.0035F, 0.0035F),
       };
-      singularity.force_x = make_noise(random, 8.0F, 18.0F, noise_channel++);
-      singularity.force_y = make_noise(random, 10.0F, 23.0F, noise_channel++);
+      singularity.force_x = make_noise(
+          random,
+          NoiseRequest{.minimum_time = 8.0F, .maximum_time = 18.0F, .channel = noise_channel++});
+      singularity.force_y = make_noise(
+          random,
+          NoiseRequest{.minimum_time = 10.0F, .maximum_time = 23.0F, .channel = noise_channel++});
       singularity.force_scale = random.range(0.0030F, 0.0058F);
       singularity.damping = random.range(0.24F, 0.40F);
 
@@ -218,7 +228,9 @@ public:
       singularity.angular_velocity = random.range(-0.0040F, 0.0040F);
       singularity.angular_drive = random.range(0.0013F, 0.0032F);
       singularity.angular_damping = random.range(0.11F, 0.22F);
-      singularity.orientation_force = make_noise(random, 17.0F, 39.0F, noise_channel++);
+      singularity.orientation_force = make_noise(
+          random,
+          NoiseRequest{.minimum_time = 17.0F, .maximum_time = 39.0F, .channel = noise_channel++});
       singularity.anisotropy =
           make_scalar(random, random.range(0.78F, 1.34F), 0.62F, 1.58F, 0.0018F, 0.0042F, 0.013F,
                       0.026F, 0.14F, 0.25F, 16.0F, 36.0F, noise_channel++);
@@ -242,7 +254,7 @@ public:
 
   [[nodiscard]] const GLfloat *positions() const { return position_values_.data(); }
   [[nodiscard]] const GLfloat *parameters() const { return parameter_values_.data(); }
-  [[nodiscard]] GLint center_count() const { return static_cast<GLint>(center_count_); }
+  [[nodiscard]] GLint center_count() const { return center_count_; }
 
 private:
   using PositionValues = std::array<GLfloat, maximum_center_count * 2U>;
@@ -250,18 +262,18 @@ private:
   static constexpr int maximum_placement_attempts = 96;
 
   FieldDynamics(std::array<Singularity, maximum_center_count> singularities,
-                std::size_t center_count)
+                std::uint8_t center_count)
       : singularities_{singularities}, center_count_{center_count} {
     refresh_uniforms();
   }
 
-  [[nodiscard]] static SmoothNoise make_noise(Random &random, float minimum_time,
-                                              float maximum_time, std::size_t channel) {
+  [[nodiscard]] static SmoothNoise make_noise(Random &random, NoiseRequest request) {
     // The channel offset further separates already independent time scales.
-    const auto channel_offset = static_cast<float>(channel) * 0.137F;
+    const auto channel_offset = static_cast<float>(request.channel) * 0.137F;
     return SmoothNoise{SmoothNoise::Configuration{
         .seed = random.bits(),
-        .correlation_time = random.range(minimum_time, maximum_time) + channel_offset,
+        .correlation_time =
+            random.range(request.minimum_time, request.maximum_time) + channel_offset,
     }};
   }
 
@@ -281,16 +293,20 @@ private:
         .drive = random.range(minimum_drive, maximum_drive),
         .restoring = random.range(minimum_restoring, maximum_restoring),
         .damping = random.range(minimum_damping, maximum_damping),
-        .noise = make_noise(random, minimum_time, maximum_time, noise_channel),
+        .noise = make_noise(random, NoiseRequest{.minimum_time = minimum_time,
+                                                 .maximum_time = maximum_time,
+                                                 .channel = noise_channel}),
     };
   }
 
-  [[nodiscard]] static std::size_t sample_center_count(Random &random) {
+  [[nodiscard]] static std::uint8_t sample_center_count(Random &random) {
     const auto sample = random.unit();
-    for (std::size_t index = 0; index < center_count_cumulative_probabilities.size(); ++index) {
-      if (sample < center_count_cumulative_probabilities[index]) {
-        return index + 1U;
+    std::uint8_t count{1U};
+    for (const auto probability : center_count_cumulative_probabilities) {
+      if (sample < probability) {
+        return count;
       }
+      ++count;
     }
     return maximum_center_count;
   }
@@ -442,7 +458,7 @@ private:
   std::array<Singularity, maximum_center_count> singularities_;
   PositionValues position_values_{};
   ParameterValues parameter_values_{};
-  std::size_t center_count_;
+  std::uint8_t center_count_;
   double simulation_time_{};
 };
 

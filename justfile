@@ -78,6 +78,8 @@ lint: configure-native configure-web
     clang-tidy --quiet src/renderer.cpp -- \
       -target wasm32-unknown-emscripten \
       -std=c++23 \
+      -nostdinc \
+      -nostdinc++ \
       -isysroot "$sysroot" \
       -resource-dir "$resource_dir" \
       -isystem "$sysroot/include/wasm32-emscripten/c++/v1" \
