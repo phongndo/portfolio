@@ -27,7 +27,6 @@
               ninja
               ccache
               emscripten
-              conan
               just
               hk
               wrangler

@@ -11,7 +11,6 @@ local project = new Mapping<String, Step> {
       "CMakeLists.txt",
       "flake.nix",
       "CMakePresets.json",
-      "vercel.json",
       ".github/**/*.yml",
       "web/**/*.html",
       "web/**/*.css",

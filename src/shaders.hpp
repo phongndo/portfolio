@@ -32,14 +32,6 @@ const vec2 positions[3] = vec2[](
     vec2(-1.0,  3.0)
 );
 
-vec2 complex_multiply(vec2 a, vec2 b) {
-  return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
-}
-
-vec2 complex_divide(vec2 a, vec2 b) {
-  return complex_multiply(a, vec2(b.x, -b.y)) / max(dot(b, b), 0.0001);
-}
-
 vec2 pole_position(int index) {
   vec2 position = u_poles[index];
   position.x *= u_resolution.x / u_resolution.y;
@@ -147,26 +139,13 @@ vec2 complex_divide(vec2 a, vec2 b) {
 float anisotropic_distance_squared(
     vec2 delta,
     vec2 orientation,
-    float anisotropy) {
-  float magnitude_squared = dot(orientation, orientation);
+    float anisotropy,
+    float magnitude_squared) {
   vec2 direction = orientation * inversesqrt(max(magnitude_squared, 0.000001));
   float along = dot(delta, direction);
   float across = dot(delta, vec2(-direction.y, direction.x));
   float shape = clamp(anisotropy, 0.55, 1.80);
   return along * along / shape + across * across * shape;
-}
-
-vec2 inverse_pole(
-    vec2 z,
-    vec2 center,
-    vec2 coefficient,
-    float radius,
-    float anisotropy) {
-  vec2 delta = z - center;
-  float distance_squared = anisotropic_distance_squared(delta, coefficient, anisotropy);
-  vec2 inverse =
-      vec2(delta.x, -delta.y) / (distance_squared + radius * radius);
-  return complex_multiply(coefficient, inverse);
 }
 
 float contour(float value, float thickness) {
@@ -187,24 +166,43 @@ float density_tone(float coordinate) {
   return mix(0.68, 1.50, compression);
 }
 
-float circulation_strength(vec2 residue, float radius, float anisotropy) {
-  float strength = clamp((length(residue) - 0.026) / 0.050, 0.0, 1.0);
+float circulation_strength(float residue_magnitude, float radius, float anisotropy) {
+  float strength = clamp((residue_magnitude - 0.026) / 0.050, 0.0, 1.0);
   float radius_variation = (radius - 0.085) * 0.018;
   float shape_variation = (anisotropy - 1.0) * 0.0015;
   return 0.0035 + 0.0070 * strength + radius_variation + shape_variation;
 }
 
 float pole_contrast(
-    vec2 delta,
-    vec2 residue,
-    float radius,
-    float anisotropy) {
-  float magnitude_squared = dot(residue, residue);
-  float flow_distance = anisotropic_distance_squared(delta, residue, anisotropy);
-  float normalized_distance = flow_distance / max(radius * radius, 0.000001);
+    float flow_distance,
+    float magnitude_squared,
+    float radius_squared) {
+  float normalized_distance = flow_distance / max(radius_squared, 0.000001);
   float strength = smoothstep(0.0015, 0.0055, magnitude_squared);
   float center_contrast = mix(0.42, 0.66, strength);
   return mix(center_contrast, 1.0, smoothstep(0.035, 0.55, normalized_distance));
+}
+
+void accumulate_singularity(
+    vec2 delta,
+    vec2 residue,
+    float radius,
+    float anisotropy,
+    float circulation_direction,
+    inout vec2 field,
+    inout float circulation,
+    inout float contrast) {
+  float magnitude_squared = dot(residue, residue);
+  float distance_squared =
+      anisotropic_distance_squared(delta, residue, anisotropy, magnitude_squared);
+  float radius_squared = radius * radius;
+  vec2 inverse = vec2(delta.x, -delta.y) / (distance_squared + radius_squared);
+
+  field += complex_multiply(residue, inverse);
+  circulation += circulation_direction *
+      circulation_strength(sqrt(magnitude_squared), radius, anisotropy) *
+      0.5 * log(distance_squared + radius_squared);
+  contrast *= pole_contrast(distance_squared, magnitude_squared, radius_squared);
 }
 
 void main() {
@@ -268,79 +266,82 @@ void main() {
   float phase_turns = atan(rational_map.y, rational_map.x) / tau;
 
   vec2 field = warped * vec2(0.33, 0.38);
-  field += inverse_pole(
-      warped, pole0, v_residues01.xy, v_radii0123.x, v_anisotropy0123.x);
+  float circulation = 0.0;
+  float singularity_contrast = 1.0;
+  accumulate_singularity(
+      delta0,
+      v_residues01.xy,
+      v_radii0123.x,
+      v_anisotropy0123.x,
+      1.0,
+      field,
+      circulation,
+      singularity_contrast);
   if (u_center_count > 1) {
-    field += inverse_pole(
-        warped, pole1, v_residues01.zw, v_radii0123.y, v_anisotropy0123.y);
+    accumulate_singularity(
+        delta1,
+        v_residues01.zw,
+        v_radii0123.y,
+        v_anisotropy0123.y,
+        -1.0,
+        field,
+        circulation,
+        singularity_contrast);
   }
   if (u_center_count > 2) {
-    field += inverse_pole(
-        warped, pole2, v_residues23.xy, v_radii0123.z, v_anisotropy0123.z);
+    accumulate_singularity(
+        delta2,
+        v_residues23.xy,
+        v_radii0123.z,
+        v_anisotropy0123.z,
+        1.0,
+        field,
+        circulation,
+        singularity_contrast);
   }
   if (u_center_count > 3) {
-    field += inverse_pole(
-        warped, pole3, v_residues23.zw, v_radii0123.w, v_anisotropy0123.w);
+    accumulate_singularity(
+        delta3,
+        v_residues23.zw,
+        v_radii0123.w,
+        v_anisotropy0123.w,
+        -1.0,
+        field,
+        circulation,
+        singularity_contrast);
   }
   if (u_center_count > 4) {
-    field += inverse_pole(
-        warped, pole4, v_residues45.xy, v_radii456.x, v_anisotropy456.x);
+    accumulate_singularity(
+        delta4,
+        v_residues45.xy,
+        v_radii456.x,
+        v_anisotropy456.x,
+        1.0,
+        field,
+        circulation,
+        singularity_contrast);
   }
   if (u_center_count > 5) {
-    field += inverse_pole(
-        warped, pole5, v_residues45.zw, v_radii456.y, v_anisotropy456.y);
+    accumulate_singularity(
+        delta5,
+        v_residues45.zw,
+        v_radii456.y,
+        v_anisotropy456.y,
+        -1.0,
+        field,
+        circulation,
+        singularity_contrast);
   }
   if (u_center_count > 6) {
-    field += inverse_pole(
-        warped, pole6, v_pole6_residue6.zw, v_radii456.z, v_anisotropy456.z);
-  }
-
-  float radial0 = 0.5 * log(
-      anisotropic_distance_squared(delta0, v_residues01.xy, v_anisotropy0123.x) +
-      v_radii0123.x * v_radii0123.x);
-  float radial1 = 0.5 * log(
-      anisotropic_distance_squared(delta1, v_residues01.zw, v_anisotropy0123.y) +
-      v_radii0123.y * v_radii0123.y);
-  float radial2 = 0.5 * log(
-      anisotropic_distance_squared(delta2, v_residues23.xy, v_anisotropy0123.z) +
-      v_radii0123.z * v_radii0123.z);
-  float radial3 = 0.5 * log(
-      anisotropic_distance_squared(delta3, v_residues23.zw, v_anisotropy0123.w) +
-      v_radii0123.w * v_radii0123.w);
-  float radial4 = 0.5 * log(
-      anisotropic_distance_squared(delta4, v_residues45.xy, v_anisotropy456.x) +
-      v_radii456.x * v_radii456.x);
-  float radial5 = 0.5 * log(
-      anisotropic_distance_squared(delta5, v_residues45.zw, v_anisotropy456.y) +
-      v_radii456.y * v_radii456.y);
-  float radial6 = 0.5 * log(
-      anisotropic_distance_squared(delta6, v_pole6_residue6.zw, v_anisotropy456.z) +
-      v_radii456.z * v_radii456.z);
-  float circulation = circulation_strength(
-      v_residues01.xy, v_radii0123.x, v_anisotropy0123.x) * radial0;
-  if (u_center_count > 1) {
-    circulation -= circulation_strength(
-        v_residues01.zw, v_radii0123.y, v_anisotropy0123.y) * radial1;
-  }
-  if (u_center_count > 2) {
-    circulation += circulation_strength(
-        v_residues23.xy, v_radii0123.z, v_anisotropy0123.z) * radial2;
-  }
-  if (u_center_count > 3) {
-    circulation -= circulation_strength(
-        v_residues23.zw, v_radii0123.w, v_anisotropy0123.w) * radial3;
-  }
-  if (u_center_count > 4) {
-    circulation += circulation_strength(
-        v_residues45.xy, v_radii456.x, v_anisotropy456.x) * radial4;
-  }
-  if (u_center_count > 5) {
-    circulation -= circulation_strength(
-        v_residues45.zw, v_radii456.y, v_anisotropy456.y) * radial5;
-  }
-  if (u_center_count > 6) {
-    circulation += circulation_strength(
-        v_pole6_residue6.zw, v_radii456.z, v_anisotropy456.z) * radial6;
+    accumulate_singularity(
+        delta6,
+        v_pole6_residue6.zw,
+        v_radii456.z,
+        v_anisotropy456.z,
+        1.0,
+        field,
+        circulation,
+        singularity_contrast);
   }
 
   float curvature =
@@ -385,32 +386,6 @@ void main() {
   float major_lines = contour(line_coordinate / 8.0, 0.15 * width_variation);
 
   float local_density = density_tone(line_coordinate);
-  float singularity_contrast = pole_contrast(
-      delta0, v_residues01.xy, v_radii0123.x, v_anisotropy0123.x);
-  if (u_center_count > 1) {
-    singularity_contrast *= pole_contrast(
-        delta1, v_residues01.zw, v_radii0123.y, v_anisotropy0123.y);
-  }
-  if (u_center_count > 2) {
-    singularity_contrast *= pole_contrast(
-        delta2, v_residues23.xy, v_radii0123.z, v_anisotropy0123.z);
-  }
-  if (u_center_count > 3) {
-    singularity_contrast *= pole_contrast(
-        delta3, v_residues23.zw, v_radii0123.w, v_anisotropy0123.w);
-  }
-  if (u_center_count > 4) {
-    singularity_contrast *= pole_contrast(
-        delta4, v_residues45.xy, v_radii456.x, v_anisotropy456.x);
-  }
-  if (u_center_count > 5) {
-    singularity_contrast *= pole_contrast(
-        delta5, v_residues45.zw, v_radii456.y, v_anisotropy456.y);
-  }
-  if (u_center_count > 6) {
-    singularity_contrast *= pole_contrast(
-        delta6, v_pole6_residue6.zw, v_radii456.z, v_anisotropy456.z);
-  }
   float structure = opacity_variation * local_density * singularity_contrast * (
       fine_lines * 0.0520 +
       middle_lines * 0.0320 +

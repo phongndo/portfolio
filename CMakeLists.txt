@@ -11,10 +11,9 @@ add_executable(portfolio src/main.cpp)
 target_compile_features(portfolio PRIVATE cxx_std_23)
 set_target_properties(portfolio PROPERTIES CXX_EXTENSIONS OFF)
 
-target_compile_options(
-  portfolio
-  PRIVATE $<$<CXX_COMPILER_ID:AppleClang,Clang,GNU>:-Wall;-Wextra;-Wpedantic;-Wconversion;-Wshadow>
-)
+if(CMAKE_CXX_COMPILER_ID MATCHES "^(AppleClang|Clang|GNU)$")
+  target_compile_options(portfolio PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror)
+endif()
 
 if(EMSCRIPTEN)
   target_sources(portfolio PRIVATE src/renderer.cpp)
@@ -57,6 +56,7 @@ if(EMSCRIPTEN)
     "SHELL:-sFILESYSTEM=0"
     "SHELL:-sMALLOC=emmalloc"
     "SHELL:-sEXIT_RUNTIME=0"
+    "SHELL:-sINITIAL_HEAP=1048576"
     "SHELL:-sALLOW_MEMORY_GROWTH=0"
     "SHELL:-sMIN_WEBGL_VERSION=2"
     "SHELL:-sMAX_WEBGL_VERSION=2"

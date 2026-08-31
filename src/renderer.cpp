@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -22,7 +23,7 @@ constexpr double maximum_frame_step = 0.1;
 constexpr int resize_settle_delay_milliseconds = 160;
 constexpr float maximum_integration_step = 1.0F / 60.0F;
 constexpr std::uint32_t fallback_random_state = 0x6D2B79F5U;
-constexpr std::uint8_t maximum_center_count = 7U;
+constexpr std::size_t maximum_center_count = 7U;
 constexpr float placement_left = 0.32F;
 constexpr float placement_right = 0.92F;
 constexpr float placement_top = 0.08F;
@@ -82,7 +83,10 @@ constexpr bool valid_fallback_positions() {
 }
 
 static_assert(fallback_positions.size() == maximum_center_count);
+static_assert(center_count_cumulative_probabilities.size() + 1U == maximum_center_count);
 static_assert(std::ranges::is_sorted(center_count_cumulative_probabilities));
+static_assert(center_count_cumulative_probabilities.front() > 0.0F &&
+              center_count_cumulative_probabilities.back() < 1.0F);
 static_assert(valid_fallback_positions());
 
 class Random final {
@@ -203,18 +207,15 @@ struct Singularity final {
 
 class FieldDynamics final {
 public:
-  static constexpr GLsizei position_count = static_cast<GLsizei>(maximum_center_count);
-  static constexpr GLsizei parameter_count = static_cast<GLsizei>(maximum_center_count);
-
   [[nodiscard]] static FieldDynamics random() {
     Random random{browser_random_state()};
-    const auto center_count = sample_center_count(random);
-    auto positions = sample_positions(random);
-    std::array<Singularity, maximum_center_count> singularities{};
+    FieldDynamics dynamics;
+    dynamics.center_count_ = sample_center_count(random);
+    const auto positions = sample_positions(random, dynamics.center_count_);
     std::size_t noise_channel{};
 
-    for (std::size_t index = 0; index < singularities.size(); ++index) {
-      auto &singularity = singularities[index];
+    for (std::size_t index = 0; index < dynamics.center_count_; ++index) {
+      auto &singularity = dynamics.singularities_[index];
       singularity.position = NormalizedPoint{
           .x = (positions[index].x * 2.0F - 1.0F) * field_domain_scale,
           .y = (positions[index].y * 2.0F - 1.0F) * field_domain_scale,
@@ -271,9 +272,6 @@ public:
                               });
     }
 
-    FieldDynamics dynamics;
-    dynamics.singularities_ = singularities;
-    dynamics.center_count_ = center_count;
     dynamics.refresh_uniforms();
     return dynamics;
   }
@@ -290,7 +288,7 @@ public:
 
   [[nodiscard]] const GLfloat *positions() const { return position_values_.data(); }
   [[nodiscard]] const GLfloat *parameters() const { return parameter_values_.data(); }
-  [[nodiscard]] GLint center_count() const { return center_count_; }
+  [[nodiscard]] GLsizei center_count() const { return static_cast<GLsizei>(center_count_); }
 
 private:
   using PositionValues = std::array<GLfloat, maximum_center_count * 2U>;
@@ -327,9 +325,9 @@ private:
     };
   }
 
-  [[nodiscard]] static std::uint8_t sample_center_count(Random &random) {
+  [[nodiscard]] static std::size_t sample_center_count(Random &random) {
     const auto sample = random.unit();
-    std::uint8_t count{1U};
+    std::size_t count{1U};
     for (const auto probability : center_count_cumulative_probabilities) {
       if (sample < probability) {
         return count;
@@ -340,9 +338,9 @@ private:
   }
 
   [[nodiscard]] static std::array<NormalizedPoint, maximum_center_count>
-  sample_positions(Random &random) {
+  sample_positions(Random &random, std::size_t center_count) {
     std::array<NormalizedPoint, maximum_center_count> positions{};
-    for (std::size_t index = 0; index < positions.size(); ++index) {
+    for (std::size_t index = 0; index < center_count; ++index) {
       const auto position = sample_position(
           random, PlacementRequest{.positions = &positions, .populated_count = index});
       if (!position) {
@@ -471,12 +469,18 @@ private:
           singularity.angular_damping * singularity.angular_velocity;
       singularity.angular_velocity += angular_acceleration * step;
       singularity.orientation += singularity.angular_velocity * step;
+      if (singularity.orientation < 0.0F || singularity.orientation >= tau) {
+        singularity.orientation = std::fmod(singularity.orientation, tau);
+        if (singularity.orientation < 0.0F) {
+          singularity.orientation += tau;
+        }
+      }
     }
     simulation_time_ += static_cast<double>(step);
   }
 
   void refresh_uniforms() {
-    for (std::size_t index = 0; index < singularities_.size(); ++index) {
+    for (std::size_t index = 0; index < center_count_; ++index) {
       const auto &singularity = singularities_[index];
       position_values_[index * 2U] = singularity.position.x;
       position_values_[index * 2U + 1U] = singularity.position.y;
@@ -490,7 +494,7 @@ private:
   std::array<Singularity, maximum_center_count> singularities_;
   PositionValues position_values_{};
   ParameterValues parameter_values_{};
-  std::uint8_t center_count_{};
+  std::size_t center_count_{};
   double simulation_time_{};
 };
 
@@ -598,7 +602,7 @@ enum class ShaderStage : std::uint8_t { vertex, fragment };
 class Shader final {
 public:
   [[nodiscard]] static std::optional<Shader> compile(ShaderStage stage, const char *source) {
-    const auto type = stage == ShaderStage::vertex ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER;
+    const GLenum type = stage == ShaderStage::vertex ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER;
     const auto handle = glCreateShader(type);
     if (handle == 0U) {
       emscripten_log(EM_LOG_ERROR, "Unable to allocate a shader");
@@ -694,14 +698,15 @@ public:
         Handles{.program = program, .vertex_array = vertex_array},
         uniforms,
     };
+    // This is the renderer's only pipeline, so its program and vertex array stay bound.
     pipeline.bind();
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_STENCIL_TEST);
     glUniform2f(uniforms.resolution, extent.width_as_float(), extent.height_as_float());
-    glUniform2fv(uniforms.poles, FieldDynamics::position_count, dynamics.positions());
-    glUniform4fv(uniforms.singularities, FieldDynamics::parameter_count, dynamics.parameters());
+    glUniform2fv(uniforms.poles, dynamics.center_count(), dynamics.positions());
+    glUniform4fv(uniforms.singularities, dynamics.center_count(), dynamics.parameters());
     glUniform1i(uniforms.center_count, dynamics.center_count());
     return pipeline;
   }
@@ -723,14 +728,12 @@ public:
   }
 
   void set_resolution(const CanvasExtent &extent) const {
-    bind();
     glUniform2f(uniforms_.resolution, extent.width_as_float(), extent.height_as_float());
   }
 
   void draw(const FieldDynamics &dynamics) const {
-    bind();
-    glUniform2fv(uniforms_.poles, FieldDynamics::position_count, dynamics.positions());
-    glUniform4fv(uniforms_.singularities, FieldDynamics::parameter_count, dynamics.parameters());
+    glUniform2fv(uniforms_.poles, dynamics.center_count(), dynamics.positions());
+    glUniform4fv(uniforms_.singularities, dynamics.center_count(), dynamics.parameters());
     glDrawArrays(GL_TRIANGLES, 0, 3);
   }
 
@@ -842,8 +845,8 @@ private:
   }
 
 private:
-  Renderer(WebGlContext context, Pipeline pipeline, FieldDynamics dynamics, CanvasExtent extent,
-           MotionMode motion_mode)
+  Renderer(WebGlContext context, Pipeline pipeline, const FieldDynamics &dynamics,
+           CanvasExtent extent, MotionMode motion_mode)
       : context_{std::move(context)}, pipeline_{std::move(pipeline)}, dynamics_{dynamics},
         extent_{extent}, motion_mode_{motion_mode} {}
 

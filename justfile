@@ -61,14 +61,14 @@ fmt:
     clang-format -i $(find src -type f \( -name '*.cpp' -o -name '*.hpp' \))
     cmake-format -i CMakeLists.txt
     nixfmt flake.nix
-    oxfmt --write CMakePresets.json vercel.json '.github/**/*.yml' 'web/**/*.{html,css}' .oxfmtrc.json .stylelintrc.json
+    oxfmt --write CMakePresets.json '.github/**/*.yml' 'web/**/*.{html,css}' .oxfmtrc.json .stylelintrc.json
 
 fmt-check:
     just --fmt --check
     clang-format --dry-run --Werror $(find src -type f \( -name '*.cpp' -o -name '*.hpp' \))
     cmake-format --check CMakeLists.txt
     nixfmt --check flake.nix
-    oxfmt --check CMakePresets.json vercel.json '.github/**/*.yml' 'web/**/*.{html,css}' .oxfmtrc.json .stylelintrc.json
+    oxfmt --check CMakePresets.json '.github/**/*.yml' 'web/**/*.{html,css}' .oxfmtrc.json .stylelintrc.json
 
 lint: configure-native configure-web
     #!/usr/bin/env bash
@@ -110,7 +110,37 @@ lint: configure-native configure-web
 flake-check:
     nix flake check
 
-check: flake-check fmt-check lint build-native build-web
+web-budget: build-web
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+
+    site="build/web-release/site"
+    check_asset() {
+      local label="$1"
+      local budget="$2"
+      shift 2
+      local files=("$@")
+      if (( ${#files[@]} != 1 )); then
+        printf 'Expected one %s asset, found %d\n' "$label" "${#files[@]}" >&2
+        return 1
+      fi
+
+      local bytes
+      bytes="$(wc -c < "${files[0]}")"
+      if (( bytes > budget )); then
+        printf '%s exceeds its budget: %d > %d bytes\n' "$label" "$bytes" "$budget" >&2
+        return 1
+      fi
+      printf '%-10s %6d / %6d bytes\n' "$label" "$bytes" "$budget"
+    }
+
+    check_asset JavaScript $((16 * 1024)) "$site"/portfolio.*.js
+    check_asset WebAssembly $((40 * 1024)) "$site"/portfolio.*.wasm
+    check_asset CSS $((3 * 1024)) "$site"/styles.*.css
+    check_asset HTML $((4 * 1024)) "$site"/index.html
+
+check: flake-check fmt-check lint build-native web-budget
 
 clean:
     cmake -E remove_directory build
