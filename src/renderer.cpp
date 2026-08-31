@@ -20,8 +20,8 @@ constexpr double maximum_device_pixel_ratio = 2.0;
 constexpr double maximum_canvas_dimension = 8192.0;
 constexpr double maximum_pixel_count = 5'000'000.0;
 constexpr std::uint32_t fallback_random_state = 0x6D2B79F5U;
-constexpr std::size_t center_count = 6;
-constexpr std::size_t seed_value_count = 48;
+constexpr std::size_t maximum_center_count = 7;
+constexpr std::size_t seed_value_count = 56;
 constexpr float placement_left = 0.32F;
 constexpr float placement_right = 0.92F;
 constexpr float placement_top = 0.08F;
@@ -37,6 +37,14 @@ struct NormalizedPoint final {
 constexpr std::array fallback_positions{
     NormalizedPoint{0.36F, 0.18F}, NormalizedPoint{0.65F, 0.15F}, NormalizedPoint{0.90F, 0.24F},
     NormalizedPoint{0.40F, 0.58F}, NormalizedPoint{0.69F, 0.52F}, NormalizedPoint{0.88F, 0.80F},
+    NormalizedPoint{0.55F, 0.85F},
+};
+
+// A discretized normal distribution centered on five (sigma 1.25). About 80%
+// of visits receive four to six centers, while a single center occurs on about
+// one in every 500 visits.
+constexpr std::array center_count_cumulative_probabilities{
+    0.00194628F, 0.02022834F, 0.11077998F, 0.34727336F, 0.67295498F, 0.90944836F,
 };
 
 constexpr bool valid_fallback_positions() {
@@ -59,7 +67,9 @@ constexpr bool valid_fallback_positions() {
 }
 
 static_assert(seed_value_count % 4U == 0U);
-static_assert(center_count * 2U <= seed_value_count);
+static_assert(maximum_center_count * 2U <= seed_value_count);
+static_assert(fallback_positions.size() == maximum_center_count);
+static_assert(std::ranges::is_sorted(center_count_cumulative_probabilities));
 static_assert(valid_fallback_positions());
 
 class Random final {
@@ -94,12 +104,13 @@ public:
 
   [[nodiscard]] static FieldSeed random() {
     Random random{browser_random_state()};
+    const auto center_count = sample_center_count(random);
     Values values;
     for (auto &value : values) {
       value = random.unit();
     }
 
-    std::array<NormalizedPoint, center_count> positions{};
+    std::array<NormalizedPoint, maximum_center_count> positions{};
     auto layout_is_complete = true;
     for (std::size_t index = 0; index < center_count; ++index) {
       const auto position = sample_position(random, positions, index);
@@ -113,23 +124,36 @@ public:
     if (!layout_is_complete) {
       positions = fallback_positions;
     }
-    for (std::size_t index = 0; index < positions.size(); ++index) {
+    for (std::size_t index = 0; index < center_count; ++index) {
       values[index * 2U] = positions[index].x;
       values[index * 2U + 1U] = positions[index].y;
     }
-    return FieldSeed{values};
+    return FieldSeed{values, center_count};
   }
 
   [[nodiscard]] const GLfloat *data() const { return values_.data(); }
+  [[nodiscard]] GLint center_count() const { return static_cast<GLint>(center_count_); }
 
 private:
   using Values = std::array<GLfloat, seed_value_count>;
   static constexpr int maximum_placement_attempts = 96;
 
-  explicit FieldSeed(Values values) : values_{values} {}
+  FieldSeed(Values values, std::size_t center_count)
+      : values_{values}, center_count_{center_count} {}
+
+  [[nodiscard]] static std::size_t sample_center_count(Random &random) {
+    const auto sample = random.unit();
+    for (std::size_t index = 0; index < center_count_cumulative_probabilities.size(); ++index) {
+      if (sample < center_count_cumulative_probabilities[index]) {
+        return index + 1U;
+      }
+    }
+    return maximum_center_count;
+  }
 
   [[nodiscard]] static std::optional<NormalizedPoint>
-  sample_position(Random &random, const std::array<NormalizedPoint, center_count> &positions,
+  sample_position(Random &random,
+                  const std::array<NormalizedPoint, maximum_center_count> &positions,
                   std::size_t populated_count) {
     for (auto attempt = 0; attempt < maximum_placement_attempts; ++attempt) {
       const NormalizedPoint candidate{
@@ -153,6 +177,7 @@ private:
   }
 
   Values values_;
+  std::size_t center_count_;
 };
 
 class CanvasExtent final {
@@ -335,6 +360,7 @@ public:
         .time = glGetUniformLocation(program, "u_time"),
         .resolution = glGetUniformLocation(program, "u_resolution"),
         .seed = glGetUniformLocation(program, "u_seed[0]"),
+        .center_count = glGetUniformLocation(program, "u_center_count"),
     };
     if (!uniforms.valid()) {
       emscripten_log(EM_LOG_ERROR, "The shader program is missing required uniforms");
@@ -362,6 +388,7 @@ public:
     glUniform1f(uniforms.time, 0.0F);
     glUniform2f(uniforms.resolution, extent.width_as_float(), extent.height_as_float());
     glUniform4fv(uniforms.seed, FieldSeed::vector_count, seed.data());
+    glUniform1i(uniforms.center_count, seed.center_count());
     return pipeline;
   }
 
@@ -402,8 +429,11 @@ private:
     GLint time;
     GLint resolution;
     GLint seed;
+    GLint center_count;
 
-    [[nodiscard]] bool valid() const { return time >= 0 && resolution >= 0 && seed >= 0; }
+    [[nodiscard]] bool valid() const {
+      return time >= 0 && resolution >= 0 && seed >= 0 && center_count >= 0;
+    }
   };
 
   Pipeline(Handles handles, Uniforms uniforms)
