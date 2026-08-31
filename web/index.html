@@ -4,9 +4,29 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#080808" />
+    <meta
+      name="description"
+      content="Portfolio of Phong N Do, a computer science student at UC Davis building terminal software and developer tools."
+    />
+    <meta name="author" content="Phong N Do" />
+    <meta name="robots" content="index, follow" />
+
+    <link rel="canonical" href="@SITE_URL@" />
     <link rel="icon" href="@FAVICON_PNG_NAME@" type="image/png" sizes="64x64" />
     <link rel="icon" href="@FAVICON_SVG_NAME@" type="image/svg+xml" sizes="any" />
-    <title>Phong N Do</title>
+
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:site_name" content="Phong N Do" />
+    <meta property="og:title" content="Phong N Do — CS at UC Davis" />
+    <meta
+      property="og:description"
+      content="Computer science student at UC Davis building terminal software and developer tools."
+    />
+    <meta property="og:url" content="@SITE_URL@" />
+
+    <title>Phong N Do — CS at UC Davis</title>
     <link rel="stylesheet" href="@STYLE_NAME@" />
     <link rel="preload" href="@BUNDLE_NAME@.wasm" as="fetch" type="application/wasm" crossorigin />
     <script src="@BUNDLE_NAME@.js" defer></script>
@@ -18,7 +38,7 @@
       <header class="identity">
         <p>
           <span>PHONG N DO</span>
-          <time datetime="2026">2026</time>
+          <time datetime="@COPYRIGHT_YEAR@">@COPYRIGHT_YEAR@</time>
         </p>
       </header>
 
@@ -33,11 +53,11 @@
           <ul>
             <li>
               - [<a href="https://github.com/phongndo/lemma">Lemma</a
-              >](https://github.com/phongndo/lemma)
+              >](https://github.com/phongndo/lemma): self-hosted terminal multiplexer in C++.
             </li>
             <li>
               - [<a href="https://github.com/phongndo/mark">Mark</a
-              >](https://github.com/phongndo/mark)
+              >](https://github.com/phongndo/mark): fast, keyboard-first Git diff reviewer in Rust.
             </li>
           </ul>
         </section>
@@ -53,6 +73,10 @@
               - [<a href="https://github.com/phongndo">github.com/phongndo</a
               >](https://github.com/phongndo)
             </li>
+            <li>
+              - [<a href="https://www.linkedin.com/in/phongndo/">linkedin.com/in/phongndo</a
+              >](https://www.linkedin.com/in/phongndo/)
+            </li>
             <li>- [<a href="https://x.com/0xphony">x.com/0xphony</a>](https://x.com/0xphony)</li>
             <li>
               - [<a href="https://instagram.com/23phg">instagram.com/23phg</a
@@ -61,6 +85,10 @@
           </ul>
         </section>
       </main>
+
+      <footer class="legal">
+        <small>&copy; <time datetime="@COPYRIGHT_YEAR@">@COPYRIGHT_YEAR@</time> Phong N Do</small>
+      </footer>
     </div>
   </body>
 </html>

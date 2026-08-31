@@ -1,3 +1,12 @@
+/*
+  Content-Security-Policy: default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'none'; frame-ancestors 'none'; img-src 'self'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; upgrade-insecure-requests
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+
 /portfolio.*
   Cache-Control: public, max-age=31536000, immutable
 
@@ -7,5 +16,9 @@
 /favicon.*
   Cache-Control: public, max-age=31536000, immutable
 
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
 /
+  Cache-Control: public, max-age=0, must-revalidate
   Link: </@BUNDLE_NAME@.wasm>; rel=preload; as=fetch; type=application/wasm; crossorigin

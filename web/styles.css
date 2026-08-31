@@ -12,14 +12,19 @@
 html,
 body {
   width: 100%;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
   overscroll-behavior: none;
 }
 
+html {
+  overflow-x: hidden;
+}
+
 body {
+  min-height: 100svh;
   margin: 0;
   padding: 4px;
+  overflow-x: hidden;
   background: #080808;
   color: rgb(232 232 228 / 82%);
 }
@@ -111,6 +116,16 @@ a:focus-visible {
   border-radius: 2px;
   outline: 1px solid currentcolor;
   outline-offset: 4px;
+}
+
+.legal {
+  margin-top: 2.75rem;
+  color: rgb(232 232 228 / 38%);
+  line-height: 1.55;
+}
+
+.legal small {
+  font: inherit;
 }
 
 @media (width <= 40rem) {

@@ -58,14 +58,14 @@ fmt:
     clang-format -i $(find src -type f \( -name '*.cpp' -o -name '*.hpp' \))
     cmake-format -i CMakeLists.txt
     nixfmt flake.nix
-    prettier --write CMakePresets.json '.github/**/*.yml' 'web/**/*.{html,css}' .prettierrc.json .stylelintrc.json
+    prettier --write CMakePresets.json vercel.json '.github/**/*.yml' 'web/**/*.{html,css}' .prettierrc.json .stylelintrc.json
 
 fmt-check:
     just --fmt --check
     clang-format --dry-run --Werror $(find src -type f \( -name '*.cpp' -o -name '*.hpp' \))
     cmake-format --check CMakeLists.txt
     nixfmt --check flake.nix
-    prettier --check CMakePresets.json '.github/**/*.yml' 'web/**/*.{html,css}' .prettierrc.json .stylelintrc.json
+    prettier --check CMakePresets.json vercel.json '.github/**/*.yml' 'web/**/*.{html,css}' .prettierrc.json .stylelintrc.json
 
 lint: configure-native configure-web
     #!/usr/bin/env bash
