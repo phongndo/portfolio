@@ -29,6 +29,7 @@
               emscripten
               conan
               just
+              wrangler
               watchexec
               browser-sync
               nixfmt

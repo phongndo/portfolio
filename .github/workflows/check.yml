@@ -14,3 +14,18 @@ jobs:
       - uses: actions/checkout@v6
       - uses: cachix/install-nix-action@v31
       - run: nix develop --command just check
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: check
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: cachix/install-nix-action@v31
+      - run: nix develop --command just build-web
+      - run: >-
+          nix develop --command wrangler pages deploy build/web-release/site
+          --project-name=phong-computer --branch=main
