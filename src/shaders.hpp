@@ -8,9 +8,9 @@ inline constexpr auto vertex = R"glsl(#version 300 es
 precision highp float;
 precision highp int;
 
-uniform float u_time;
 uniform vec2 u_resolution;
-uniform vec4 u_seed[14];
+uniform vec2 u_poles[7];
+uniform vec4 u_singularities[7];
 uniform int u_center_count;
 
 flat out vec4 v_poles01;
@@ -21,16 +21,11 @@ flat out vec4 v_transform;
 flat out vec4 v_residues01;
 flat out vec4 v_residues23;
 flat out vec4 v_residues45;
-flat out vec4 v_fold;
-flat out vec4 v_circulation03;
-flat out vec3 v_circulation456;
-flat out vec4 v_secondary0;
-flat out vec4 v_secondary1;
-flat out vec4 v_secondary2;
+flat out vec4 v_anisotropy0123;
+flat out vec3 v_anisotropy456;
+flat out vec4 v_radii0123;
+flat out vec3 v_radii456;
 flat out vec4 v_dynamics;
-
-const float animation_speed = 0.20;
-const float tau = 6.283185307179586;
 const vec2 positions[3] = vec2[](
     vec2(-1.0, -1.0),
     vec2( 3.0, -1.0),
@@ -45,150 +40,51 @@ vec2 complex_divide(vec2 a, vec2 b) {
   return complex_multiply(a, vec2(b.x, -b.y)) / max(dot(b, b), 0.0001);
 }
 
-float random_value(int channel) {
-  return u_seed[channel / 4][channel % 4];
+vec2 pole_position(int index) {
+  vec2 position = u_poles[index];
+  position.x *= u_resolution.x / u_resolution.y;
+  return position;
 }
 
-float random_signed(int channel) {
-  return random_value(channel) * 2.0 - 1.0;
-}
-
-vec2 random_coordinate(int index) {
-  int channel = index * 2;
-  vec2 point = vec2(random_value(channel), random_value(channel + 1)) * 2.0 - 1.0;
-  point.x *= u_resolution.x / u_resolution.y;
-  return point * 1.08;
-}
-
-vec2 warp_coordinate(vec2 coordinate, vec2 bend, vec2 offset) {
-  return complex_divide(
-      coordinate + offset,
-      vec2(1.0, 0.0) + complex_multiply(bend, coordinate));
-}
-
-vec2 animated_pole(
-    int index,
-    float t,
-    float phase,
-    float x_frequency,
-    float y_frequency,
-    float phase_shift,
-    vec2 bend,
-    vec2 offset) {
-  float amplitude = 0.028 + 0.020 * random_value(21 + index);
-  vec2 orbit = amplitude * vec2(
-      sin(t * x_frequency + phase + phase_shift),
-      0.86 * cos(t * y_frequency + phase * 0.83 - phase_shift));
-  return warp_coordinate(random_coordinate(index), bend, offset) + orbit;
-}
-
-float evolving_strength(int index, float t, float phase) {
-  float strength =
-      0.30 + 0.40 * random_value(32 + index) +
-      0.065 * sin(t * (0.17 + 0.018 * float(index)) + phase * 0.31);
-  return clamp(strength, 0.26, 0.76);
-}
-
-vec2 residue(int index, float strength, float t, float phase) {
-  float angle =
-      tau * random_value(39 + index) +
-      0.075 * sin(t * (0.21 + 0.011 * float(index)) + phase * 0.23);
-  float magnitude = 0.026 + 0.050 * strength;
-  return magnitude * vec2(cos(angle), sin(angle));
-}
-
-float circulation(int index, float strength, float t, float phase) {
-  return
-      (0.0035 + 0.0070 * strength + 0.0020 * random_value(46 + index)) *
-      (0.90 + 0.10 * sin(t * (0.15 + 0.012 * float(index)) + phase * 0.19));
+vec2 residue(vec4 singularity) {
+  float magnitude = 0.026 + 0.050 * singularity.x;
+  return magnitude * vec2(cos(singularity.y), sin(singularity.y));
 }
 
 void main() {
   gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
 
-  float t = u_time * animation_speed;
-  float phase0 = tau * random_value(14);
-  float phase1 = tau * random_value(15);
-  float phase2 = tau * random_value(16);
-  float phase3 = tau * random_value(17);
-  float phase4 = tau * random_value(18);
-  float phase5 = tau * random_value(19);
-  float phase6 = tau * random_value(20);
+  vec2 pole0 = pole_position(0);
+  vec2 pole1 = pole_position(1);
+  vec2 pole2 = pole_position(2);
+  vec2 pole3 = pole_position(3);
+  vec2 pole4 = pole_position(4);
+  vec2 pole5 = pole_position(5);
+  vec2 pole6 = pole_position(6);
 
+  vec4 singularity0 = u_singularities[0];
+  vec4 singularity1 = u_singularities[1];
+  vec4 singularity2 = u_singularities[2];
+  vec4 singularity3 = u_singularities[3];
+  vec4 singularity4 = u_singularities[4];
+  vec4 singularity5 = u_singularities[5];
+  vec4 singularity6 = u_singularities[6];
+
+  vec2 residue0 = residue(singularity0);
+  vec2 residue1 = residue(singularity1);
+  vec2 residue2 = residue(singularity2);
+  vec2 residue3 = residue(singularity3);
+  vec2 residue4 = residue(singularity4);
+  vec2 residue5 = residue(singularity5);
+  vec2 residue6 = residue(singularity6);
+
+  int last_index = max(u_center_count - 1, 0);
+  vec2 last_pole = pole_position(last_index);
+  vec4 last_singularity = u_singularities[last_index];
   vec2 bend = vec2(
-      0.064 + 0.014 * random_signed(28) + 0.013 * sin(t * 0.25 + phase0 * 0.31),
-      0.018 * random_signed(29) + 0.038 * cos(t * 0.21 + phase3 * 0.27));
-  vec2 offset = vec2(
-      0.010 * random_signed(30) + 0.022 * sin(t * 0.34 + phase2 * 0.25),
-      0.009 * random_signed(31) + 0.019 * cos(t * 0.29 + phase5 * 0.23));
-
-  vec2 pole0 = animated_pole(0, t, phase0, 0.41, 0.33, 0.0, bend, offset);
-  vec2 pole1 = animated_pole(1, t, phase1, 0.31, 0.43, 0.7, bend, offset);
-  vec2 pole2 = animated_pole(2, t, phase2, 0.37, 0.29, 1.4, bend, offset);
-  vec2 pole3 = animated_pole(3, t, phase3, 0.27, 0.39, 2.1, bend, offset);
-  vec2 pole4 = animated_pole(4, t, phase4, 0.35, 0.25, 2.8, bend, offset);
-  vec2 pole5 = animated_pole(5, t, phase5, 0.29, 0.37, 3.5, bend, offset);
-  vec2 pole6 = animated_pole(6, t, phase6, 0.33, 0.31, 4.2, bend, offset);
-
-  float strengths[7] = float[](
-      evolving_strength(0, t, phase0),
-      evolving_strength(1, t, phase1),
-      evolving_strength(2, t, phase2),
-      evolving_strength(3, t, phase3),
-      evolving_strength(4, t, phase4),
-      evolving_strength(5, t, phase5),
-      evolving_strength(6, t, phase6));
-  int dominant_index = min(
-      u_center_count - 1,
-      int(floor(random_value(53) * float(u_center_count))));
-  int secondary_index =
-      (dominant_index + max(1, u_center_count / 2)) % u_center_count;
-  strengths[dominant_index] = 0.90 + 0.08 * sin(t * 0.13 + phase4 * 0.29);
-  strengths[secondary_index] = max(
-      strengths[secondary_index],
-      0.68 + 0.07 * cos(t * 0.16 + phase1 * 0.21));
-
-  vec2 residue0 = residue(0, strengths[0], t, phase0);
-  vec2 residue1 = residue(1, strengths[1], t, phase1);
-  vec2 residue2 = residue(2, strengths[2], t, phase2);
-  vec2 residue3 = residue(3, strengths[3], t, phase3);
-  vec2 residue4 = residue(4, strengths[4], t, phase4);
-  vec2 residue5 = residue(5, strengths[5], t, phase5);
-  vec2 residue6 = residue(6, strengths[6], t, phase6);
-
-  vec2 fold_anchor_a = u_center_count > 1 ? pole1 : pole0;
-  vec2 fold_anchor_b =
-      u_center_count > 4 ? pole4 : (u_center_count > 2 ? pole2 : pole0);
-  vec2 fold_center =
-      (fold_anchor_a + fold_anchor_b) * 0.5 +
-      0.055 * vec2(sin(t * 0.23 + phase2), cos(t * 0.19 + phase5));
-  float fold_angle = phase0 * 0.37 + phase5 * 0.63 + 0.09 * sin(t * 0.18 + phase3);
-  float fold_magnitude =
-      (0.009 + 0.007 * random_value(54)) *
-      (0.82 + 0.18 * sin(t * 0.24 + phase2 * 0.31));
-  vec2 fold_residue = fold_magnitude * vec2(cos(fold_angle), sin(fold_angle));
-
-  // A separate, regularized field contributes only a weak shear. Its centers
-  // orbit independently and never enter the primary phase topology.
-  float secondary_strength = clamp(
-      0.060 + 0.020 * random_value(54) + 0.006 * sin(t * 0.15 + phase1),
-      0.050,
-      0.090);
-  vec2 secondary_center0 =
-      pole0 + 0.105 * vec2(sin(t * 0.17 + phase3), 0.76 * cos(t * 0.21 + phase5));
-  vec2 secondary_center1 =
-      pole2 + 0.115 * vec2(cos(t * 0.19 + phase5), 0.72 * sin(t * 0.16 + phase0));
-  vec2 secondary_center2 =
-      pole4 + 0.100 * vec2(sin(t * 0.14 + phase1), 0.80 * cos(t * 0.18 + phase3));
-  vec2 secondary_residue0 = secondary_strength * complex_multiply(
-      residue0,
-      vec2(cos(phase2 * 0.17 + 0.40), sin(phase2 * 0.17 + 0.40)));
-  vec2 secondary_residue1 = secondary_strength * complex_multiply(
-      residue2,
-      vec2(cos(phase4 * 0.19 + 1.10), sin(phase4 * 0.19 + 1.10)));
-  vec2 secondary_residue2 = secondary_strength * complex_multiply(
-      residue4,
-      vec2(cos(phase0 * 0.23 + 1.80), sin(phase0 * 0.23 + 1.80)));
+      0.060 + 0.012 * (singularity0.z - 1.0),
+      0.020 * (last_singularity.z - 1.0));
+  vec2 offset = 0.006 * (pole0 + last_pole);
 
   v_poles01 = vec4(pole0, pole1);
   v_poles23 = vec4(pole2, pole3);
@@ -198,24 +94,17 @@ void main() {
   v_residues01 = vec4(residue0, residue1);
   v_residues23 = vec4(residue2, residue3);
   v_residues45 = vec4(residue4, residue5);
-  v_fold = vec4(fold_center, fold_residue);
-  v_circulation03 = vec4(
-      circulation(0, strengths[0], t, phase0),
-      circulation(1, strengths[1], t, phase1),
-      circulation(2, strengths[2], t, phase2),
-      circulation(3, strengths[3], t, phase3));
-  v_circulation456 = vec3(
-      circulation(4, strengths[4], t, phase4),
-      circulation(5, strengths[5], t, phase5),
-      circulation(6, strengths[6], t, phase6));
-  v_secondary0 = vec4(secondary_center0, secondary_residue0);
-  v_secondary1 = vec4(secondary_center1, secondary_residue1);
-  v_secondary2 = vec4(secondary_center2, secondary_residue2);
+  v_anisotropy0123 = vec4(
+      singularity0.z, singularity1.z, singularity2.z, singularity3.z);
+  v_anisotropy456 = vec3(singularity4.z, singularity5.z, singularity6.z);
+  v_radii0123 = vec4(
+      singularity0.w, singularity1.w, singularity2.w, singularity3.w);
+  v_radii456 = vec3(singularity4.w, singularity5.w, singularity6.w);
   v_dynamics = vec4(
-      0.0045 + 0.0020 * random_value(55) + 0.0010 * sin(t * 0.19 + phase3 * 0.17),
-      0.018 * random_signed(55),
-      phase0 * 0.37 + phase3 * 0.63 + t * 0.22,
-      phase2 * 0.61 + phase5 * 0.39 - t * 0.18);
+      0.0045 + 0.0015 * 0.5 * (singularity0.x + last_singularity.x),
+      0.012 * (singularity0.z - last_singularity.z),
+      0.37 * singularity0.y + 0.63 * last_singularity.y + 0.08 * pole0.y,
+      0.61 * singularity0.y - 0.39 * last_singularity.y + 0.07 * last_pole.x);
 }
 )glsl";
 
@@ -235,12 +124,10 @@ flat in vec4 v_transform;
 flat in vec4 v_residues01;
 flat in vec4 v_residues23;
 flat in vec4 v_residues45;
-flat in vec4 v_fold;
-flat in vec4 v_circulation03;
-flat in vec3 v_circulation456;
-flat in vec4 v_secondary0;
-flat in vec4 v_secondary1;
-flat in vec4 v_secondary2;
+flat in vec4 v_anisotropy0123;
+flat in vec3 v_anisotropy456;
+flat in vec4 v_radii0123;
+flat in vec3 v_radii456;
 flat in vec4 v_dynamics;
 
 out vec4 fragment_color;
@@ -257,9 +144,28 @@ vec2 complex_divide(vec2 a, vec2 b) {
   return complex_multiply(a, vec2(b.x, -b.y)) / max(dot(b, b), 0.0001);
 }
 
-vec2 inverse_pole(vec2 z, vec2 center, vec2 coefficient, float core) {
+float anisotropic_distance_squared(
+    vec2 delta,
+    vec2 orientation,
+    float anisotropy) {
+  float magnitude_squared = dot(orientation, orientation);
+  vec2 direction = orientation * inversesqrt(max(magnitude_squared, 0.000001));
+  float along = dot(delta, direction);
+  float across = dot(delta, vec2(-direction.y, direction.x));
+  float shape = clamp(anisotropy, 0.55, 1.80);
+  return along * along / shape + across * across * shape;
+}
+
+vec2 inverse_pole(
+    vec2 z,
+    vec2 center,
+    vec2 coefficient,
+    float radius,
+    float anisotropy) {
   vec2 delta = z - center;
-  vec2 inverse = vec2(delta.x, -delta.y) / (dot(delta, delta) + core);
+  float distance_squared = anisotropic_distance_squared(delta, coefficient, anisotropy);
+  vec2 inverse =
+      vec2(delta.x, -delta.y) / (distance_squared + radius * radius);
   return complex_multiply(coefficient, inverse);
 }
 
@@ -281,15 +187,24 @@ float density_tone(float coordinate) {
   return mix(0.68, 1.50, compression);
 }
 
-float pole_contrast(vec2 delta, vec2 residue) {
+float circulation_strength(vec2 residue, float radius, float anisotropy) {
+  float strength = clamp((length(residue) - 0.026) / 0.050, 0.0, 1.0);
+  float radius_variation = (radius - 0.085) * 0.018;
+  float shape_variation = (anisotropy - 1.0) * 0.0015;
+  return 0.0035 + 0.0070 * strength + radius_variation + shape_variation;
+}
+
+float pole_contrast(
+    vec2 delta,
+    vec2 residue,
+    float radius,
+    float anisotropy) {
   float magnitude_squared = dot(residue, residue);
-  vec2 direction = residue * inversesqrt(max(magnitude_squared, 0.000001));
-  float along = dot(delta, direction);
-  float across = dot(delta, vec2(-direction.y, direction.x));
-  float flow_distance = 0.68 * along * along + 1.32 * across * across;
+  float flow_distance = anisotropic_distance_squared(delta, residue, anisotropy);
+  float normalized_distance = flow_distance / max(radius * radius, 0.000001);
   float strength = smoothstep(0.0015, 0.0055, magnitude_squared);
   float center_contrast = mix(0.42, 0.66, strength);
-  return mix(center_contrast, 1.0, smoothstep(0.0002, 0.0032, flow_distance));
+  return mix(center_contrast, 1.0, smoothstep(0.035, 0.55, normalized_distance));
 }
 
 void main() {
@@ -353,62 +268,79 @@ void main() {
   float phase_turns = atan(rational_map.y, rational_map.x) / tau;
 
   vec2 field = warped * vec2(0.33, 0.38);
-  field += inverse_pole(warped, pole0, v_residues01.xy, 0.0060);
+  field += inverse_pole(
+      warped, pole0, v_residues01.xy, v_radii0123.x, v_anisotropy0123.x);
   if (u_center_count > 1) {
-    field += inverse_pole(warped, pole1, v_residues01.zw, 0.0065);
-    field += inverse_pole(warped, v_fold.xy, v_fold.zw, 0.0120);
+    field += inverse_pole(
+        warped, pole1, v_residues01.zw, v_radii0123.y, v_anisotropy0123.y);
   }
   if (u_center_count > 2) {
-    field += inverse_pole(warped, pole2, v_residues23.xy, 0.0055);
+    field += inverse_pole(
+        warped, pole2, v_residues23.xy, v_radii0123.z, v_anisotropy0123.z);
   }
   if (u_center_count > 3) {
-    field += inverse_pole(warped, pole3, v_residues23.zw, 0.0070);
+    field += inverse_pole(
+        warped, pole3, v_residues23.zw, v_radii0123.w, v_anisotropy0123.w);
   }
   if (u_center_count > 4) {
-    field += inverse_pole(warped, pole4, v_residues45.xy, 0.0062);
+    field += inverse_pole(
+        warped, pole4, v_residues45.xy, v_radii456.x, v_anisotropy456.x);
   }
   if (u_center_count > 5) {
-    field += inverse_pole(warped, pole5, v_residues45.zw, 0.0058);
+    field += inverse_pole(
+        warped, pole5, v_residues45.zw, v_radii456.y, v_anisotropy456.y);
   }
   if (u_center_count > 6) {
-    field += inverse_pole(warped, pole6, v_pole6_residue6.zw, 0.0064);
+    field += inverse_pole(
+        warped, pole6, v_pole6_residue6.zw, v_radii456.z, v_anisotropy456.z);
   }
 
-  vec2 secondary_field =
-      inverse_pole(warped, v_secondary0.xy, v_secondary0.zw, 0.0220);
-  if (u_center_count > 2) {
-    secondary_field += inverse_pole(warped, v_secondary1.xy, v_secondary1.zw, 0.0240);
-  }
-  if (u_center_count > 4) {
-    secondary_field += inverse_pole(warped, v_secondary2.xy, v_secondary2.zw, 0.0200);
-  }
-  field += secondary_field;
-
-  float radius0 = 0.5 * log(dot(delta0, delta0) + 0.0060);
-  float radius1 = 0.5 * log(dot(delta1, delta1) + 0.0065);
-  float radius2 = 0.5 * log(dot(delta2, delta2) + 0.0055);
-  float radius3 = 0.5 * log(dot(delta3, delta3) + 0.0070);
-  float radius4 = 0.5 * log(dot(delta4, delta4) + 0.0062);
-  float radius5 = 0.5 * log(dot(delta5, delta5) + 0.0058);
-  float radius6 = 0.5 * log(dot(delta6, delta6) + 0.0064);
-  float circulation = v_circulation03.x * radius0;
+  float radial0 = 0.5 * log(
+      anisotropic_distance_squared(delta0, v_residues01.xy, v_anisotropy0123.x) +
+      v_radii0123.x * v_radii0123.x);
+  float radial1 = 0.5 * log(
+      anisotropic_distance_squared(delta1, v_residues01.zw, v_anisotropy0123.y) +
+      v_radii0123.y * v_radii0123.y);
+  float radial2 = 0.5 * log(
+      anisotropic_distance_squared(delta2, v_residues23.xy, v_anisotropy0123.z) +
+      v_radii0123.z * v_radii0123.z);
+  float radial3 = 0.5 * log(
+      anisotropic_distance_squared(delta3, v_residues23.zw, v_anisotropy0123.w) +
+      v_radii0123.w * v_radii0123.w);
+  float radial4 = 0.5 * log(
+      anisotropic_distance_squared(delta4, v_residues45.xy, v_anisotropy456.x) +
+      v_radii456.x * v_radii456.x);
+  float radial5 = 0.5 * log(
+      anisotropic_distance_squared(delta5, v_residues45.zw, v_anisotropy456.y) +
+      v_radii456.y * v_radii456.y);
+  float radial6 = 0.5 * log(
+      anisotropic_distance_squared(delta6, v_pole6_residue6.zw, v_anisotropy456.z) +
+      v_radii456.z * v_radii456.z);
+  float circulation = circulation_strength(
+      v_residues01.xy, v_radii0123.x, v_anisotropy0123.x) * radial0;
   if (u_center_count > 1) {
-    circulation -= v_circulation03.y * radius1;
+    circulation -= circulation_strength(
+        v_residues01.zw, v_radii0123.y, v_anisotropy0123.y) * radial1;
   }
   if (u_center_count > 2) {
-    circulation += v_circulation03.z * radius2;
+    circulation += circulation_strength(
+        v_residues23.xy, v_radii0123.z, v_anisotropy0123.z) * radial2;
   }
   if (u_center_count > 3) {
-    circulation -= v_circulation03.w * radius3;
+    circulation -= circulation_strength(
+        v_residues23.zw, v_radii0123.w, v_anisotropy0123.w) * radial3;
   }
   if (u_center_count > 4) {
-    circulation += v_circulation456.x * radius4;
+    circulation += circulation_strength(
+        v_residues45.xy, v_radii456.x, v_anisotropy456.x) * radial4;
   }
   if (u_center_count > 5) {
-    circulation -= v_circulation456.y * radius5;
+    circulation -= circulation_strength(
+        v_residues45.zw, v_radii456.y, v_anisotropy456.y) * radial5;
   }
   if (u_center_count > 6) {
-    circulation += v_circulation456.z * radius6;
+    circulation += circulation_strength(
+        v_pole6_residue6.zw, v_radii456.z, v_anisotropy456.z) * radial6;
   }
 
   float curvature =
@@ -453,24 +385,31 @@ void main() {
   float major_lines = contour(line_coordinate / 8.0, 0.15 * width_variation);
 
   float local_density = density_tone(line_coordinate);
-  float singularity_contrast = pole_contrast(delta0, v_residues01.xy);
+  float singularity_contrast = pole_contrast(
+      delta0, v_residues01.xy, v_radii0123.x, v_anisotropy0123.x);
   if (u_center_count > 1) {
-    singularity_contrast *= pole_contrast(delta1, v_residues01.zw);
+    singularity_contrast *= pole_contrast(
+        delta1, v_residues01.zw, v_radii0123.y, v_anisotropy0123.y);
   }
   if (u_center_count > 2) {
-    singularity_contrast *= pole_contrast(delta2, v_residues23.xy);
+    singularity_contrast *= pole_contrast(
+        delta2, v_residues23.xy, v_radii0123.z, v_anisotropy0123.z);
   }
   if (u_center_count > 3) {
-    singularity_contrast *= pole_contrast(delta3, v_residues23.zw);
+    singularity_contrast *= pole_contrast(
+        delta3, v_residues23.zw, v_radii0123.w, v_anisotropy0123.w);
   }
   if (u_center_count > 4) {
-    singularity_contrast *= pole_contrast(delta4, v_residues45.xy);
+    singularity_contrast *= pole_contrast(
+        delta4, v_residues45.xy, v_radii456.x, v_anisotropy456.x);
   }
   if (u_center_count > 5) {
-    singularity_contrast *= pole_contrast(delta5, v_residues45.zw);
+    singularity_contrast *= pole_contrast(
+        delta5, v_residues45.zw, v_radii456.y, v_anisotropy456.y);
   }
   if (u_center_count > 6) {
-    singularity_contrast *= pole_contrast(delta6, v_pole6_residue6.zw);
+    singularity_contrast *= pole_contrast(
+        delta6, v_pole6_residue6.zw, v_radii456.z, v_anisotropy456.z);
   }
   float structure = opacity_variation * local_density * singularity_contrast * (
       fine_lines * 0.0520 +
