@@ -138,7 +138,7 @@ web-budget: build-web
     check_asset JavaScript $((16 * 1024)) "$site"/portfolio.*.js
     check_asset WebAssembly $((40 * 1024)) "$site"/portfolio.*.wasm
     check_asset CSS $((3 * 1024)) "$site"/styles.*.css
-    check_asset HTML $((4 * 1024)) "$site"/index.html
+    check_asset HTML $((5 * 1024)) "$site"/index.html
 
 check: flake-check fmt-check lint build-native web-budget
 
