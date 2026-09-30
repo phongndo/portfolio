@@ -6,7 +6,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <numbers>
 #include <optional>
+#include <ranges>
+#include <span>
 #include <utility>
 
 #include <GLES3/gl3.h>
@@ -24,10 +27,6 @@ constexpr int resize_settle_delay_milliseconds = 160;
 constexpr float maximum_integration_step = 1.0F / 60.0F;
 constexpr std::uint32_t fallback_random_state = 0x6D2B79F5U;
 constexpr std::size_t maximum_center_count = 7U;
-constexpr float placement_left = 0.32F;
-constexpr float placement_right = 0.92F;
-constexpr float placement_top = 0.08F;
-constexpr float placement_bottom = 0.92F;
 constexpr float minimum_center_distance = 0.21F;
 constexpr float minimum_center_distance_squared = minimum_center_distance * minimum_center_distance;
 constexpr float field_domain_scale = 1.08F;
@@ -35,25 +34,57 @@ constexpr float boundary_stiffness = 0.055F;
 constexpr float interaction_radius = 0.24F;
 constexpr float interaction_strength = 0.006F;
 constexpr float maximum_drift_speed = 0.040F;
-constexpr float tau = 6.283185307179586F;
+constexpr float tau = 2.0F * std::numbers::pi_v<float>;
 
-struct NormalizedPoint final {
-  float x;
-  float y;
+struct Vec2 final {
+  float x{};
+  float y{};
+
+  friend constexpr Vec2 operator+(Vec2 lhs, Vec2 rhs) { return {lhs.x + rhs.x, lhs.y + rhs.y}; }
+  friend constexpr Vec2 operator-(Vec2 lhs, Vec2 rhs) { return {lhs.x - rhs.x, lhs.y - rhs.y}; }
+  friend constexpr Vec2 operator*(Vec2 vector, float scale) {
+    return {vector.x * scale, vector.y * scale};
+  }
+  friend constexpr Vec2 operator/(Vec2 vector, float divisor) {
+    return {vector.x / divisor, vector.y / divisor};
+  }
+  constexpr Vec2 &operator+=(Vec2 other) { return *this = *this + other; }
+  constexpr Vec2 &operator-=(Vec2 other) { return *this = *this - other; }
+  constexpr Vec2 &operator*=(float scale) { return *this = *this * scale; }
 };
+
+[[nodiscard]] constexpr float length_squared(Vec2 vector) {
+  return vector.x * vector.x + vector.y * vector.y;
+}
 
 struct Bounds final {
   float minimum;
   float maximum;
+
+  [[nodiscard]] constexpr float span() const { return maximum - minimum; }
+  [[nodiscard]] constexpr bool contains(float value) const {
+    return value >= minimum && value <= maximum;
+  }
+  // The signed distance that returns an outside value to the nearest bound.
+  [[nodiscard]] constexpr float overshoot_correction(float value) const {
+    if (value < minimum) {
+      return minimum - value;
+    }
+    if (value > maximum) {
+      return maximum - value;
+    }
+    return 0.0F;
+  }
 };
 
-constexpr Bounds horizontal_boundaries{.minimum = -0.76F, .maximum = 1.00F};
-constexpr Bounds vertical_boundaries{.minimum = -1.00F, .maximum = 1.00F};
+constexpr Bounds placement_x{.minimum = 0.32F, .maximum = 0.92F};
+constexpr Bounds placement_y{.minimum = 0.08F, .maximum = 0.92F};
+constexpr Bounds boundary_x{.minimum = -0.76F, .maximum = 1.00F};
+constexpr Bounds boundary_y{.minimum = -1.00F, .maximum = 1.00F};
 
 constexpr std::array fallback_positions{
-    NormalizedPoint{0.36F, 0.18F}, NormalizedPoint{0.65F, 0.15F}, NormalizedPoint{0.90F, 0.24F},
-    NormalizedPoint{0.40F, 0.58F}, NormalizedPoint{0.69F, 0.52F}, NormalizedPoint{0.88F, 0.80F},
-    NormalizedPoint{0.55F, 0.85F},
+    Vec2{0.36F, 0.18F}, Vec2{0.65F, 0.15F}, Vec2{0.90F, 0.24F}, Vec2{0.40F, 0.58F},
+    Vec2{0.69F, 0.52F}, Vec2{0.88F, 0.80F}, Vec2{0.55F, 0.85F},
 };
 
 // A discretized normal distribution centered on five (sigma 1.25). About 80%
@@ -63,20 +94,18 @@ constexpr std::array center_count_cumulative_probabilities{
     0.00194628F, 0.02022834F, 0.11077998F, 0.34727336F, 0.67295498F, 0.90944836F,
 };
 
-constexpr bool valid_fallback_positions() {
-  for (std::size_t index = 0; index < fallback_positions.size(); ++index) {
-    const auto point = fallback_positions[index];
-    if (point.x < placement_left || point.x > placement_right || point.y < placement_top ||
-        point.y > placement_bottom) {
-      return false;
-    }
+[[nodiscard]] constexpr bool is_placeable(Vec2 candidate, std::span<const Vec2> placed) {
+  return placement_x.contains(candidate.x) && placement_y.contains(candidate.y) &&
+         std::ranges::none_of(placed, [candidate](Vec2 other) {
+           return length_squared(candidate - other) < minimum_center_distance_squared;
+         });
+}
 
-    for (std::size_t previous = 0; previous < index; ++previous) {
-      const auto delta_x = point.x - fallback_positions[previous].x;
-      const auto delta_y = point.y - fallback_positions[previous].y;
-      if (delta_x * delta_x + delta_y * delta_y < minimum_center_distance_squared) {
-        return false;
-      }
+[[nodiscard]] constexpr bool valid_fallback_positions() {
+  const std::span positions{fallback_positions};
+  for (std::size_t index = 0; index < positions.size(); ++index) {
+    if (!is_placeable(positions[index], positions.first(index))) {
+      return false;
     }
   }
   return true;
@@ -102,9 +131,7 @@ public:
 
   [[nodiscard]] float unit() { return static_cast<float>(bits() >> 8U) * (1.0F / 16777216.0F); }
 
-  [[nodiscard]] float range(float minimum, float maximum) {
-    return minimum + (maximum - minimum) * unit();
-  }
+  [[nodiscard]] float range(Bounds bounds) { return bounds.minimum + bounds.span() * unit(); }
 
 private:
   std::uint32_t state_;
@@ -160,22 +187,89 @@ private:
   float correlation_time_{1.0F};
 };
 
-struct ScalarMotion final {
-  float value{};
-  float velocity{};
-  float equilibrium{};
-  float minimum{};
-  float maximum{};
-  float drive{};
-  float restoring{};
-  float damping{};
-  SmoothNoise noise{};
+struct TimeStep final {
+  double time;
+  float duration;
 };
 
-struct NoiseRequest final {
-  float minimum_time;
-  float maximum_time;
-  std::size_t channel;
+// A damped oscillator driven by noise toward its equilibrium, softly held
+// inside its range.
+struct ScalarMotion final {
+  float value;
+  float velocity;
+  float equilibrium;
+  Bounds range;
+  float drive;
+  float restoring;
+  float damping;
+  SmoothNoise noise;
+
+  void integrate(TimeStep step) {
+    const auto acceleration = drive * noise.sample(step.time) - restoring * (value - equilibrium) -
+                              damping * velocity +
+                              boundary_stiffness * 2.0F * range.overshoot_correction(value);
+    velocity += acceleration * step.duration;
+    value += velocity * step.duration;
+
+    const auto safety_margin = 0.25F * range.span();
+    value = std::clamp(value, range.minimum - safety_margin, range.maximum + safety_margin);
+  }
+};
+
+struct AngularMotion final {
+  float orientation;
+  float velocity;
+  float drive;
+  float damping;
+  SmoothNoise noise;
+
+  void integrate(TimeStep step) {
+    const auto acceleration = drive * noise.sample(step.time) - damping * velocity;
+    velocity += acceleration * step.duration;
+    orientation += velocity * step.duration;
+    if (orientation < 0.0F || orientation >= tau) {
+      orientation = std::fmod(orientation, tau);
+      if (orientation < 0.0F) {
+        orientation += tau;
+      }
+    }
+  }
+};
+
+struct PlanarMotion final {
+  Vec2 position;
+  Vec2 velocity;
+  SmoothNoise noise_x;
+  SmoothNoise noise_y;
+  float drive;
+  float damping;
+
+  [[nodiscard]] Vec2 acceleration(double time) const {
+    const Vec2 noise{noise_x.sample(time), noise_y.sample(time)};
+    const Vec2 containment{
+        boundary_stiffness * boundary_x.overshoot_correction(position.x),
+        boundary_stiffness * boundary_y.overshoot_correction(position.y),
+    };
+    return noise * drive + containment - velocity * damping;
+  }
+
+  void integrate(Vec2 acceleration, float duration) {
+    velocity += acceleration * duration;
+    const auto speed_squared = length_squared(velocity);
+    if (speed_squared > maximum_drift_speed * maximum_drift_speed) {
+      velocity *= maximum_drift_speed / std::sqrt(speed_squared);
+    }
+    position += velocity * duration;
+  }
+};
+
+// Declaration order is also the order in which random parameters are drawn.
+struct Singularity final {
+  PlanarMotion drift;
+  ScalarMotion strength;
+  AngularMotion rotation;
+  ScalarMotion anisotropy;
+  ScalarMotion influence_radius;
 };
 
 struct ScalarRequest final {
@@ -185,93 +279,103 @@ struct ScalarRequest final {
   Bounds restoring;
   Bounds damping;
   Bounds correlation_time;
-  std::size_t noise_channel;
 };
 
-struct Singularity final {
-  NormalizedPoint position{};
-  NormalizedPoint velocity{};
-  SmoothNoise force_x{};
-  SmoothNoise force_y{};
-  float force_scale{};
-  float damping{};
-  ScalarMotion strength{};
-  float orientation{};
-  float angular_velocity{};
-  float angular_drive{};
-  float angular_damping{};
-  SmoothNoise orientation_force{};
-  ScalarMotion anisotropy{};
-  ScalarMotion influence_radius{};
+// Draws motion parameters, giving every noise source its own channel.
+class MotionSampler final {
+public:
+  explicit MotionSampler(Random &random) : random_{random} {}
+
+  [[nodiscard]] float range(Bounds bounds) { return random_.range(bounds); }
+
+  [[nodiscard]] SmoothNoise noise(Bounds correlation_time) {
+    // The channel offset further separates already independent time scales.
+    const auto channel_offset = static_cast<float>(next_channel_++) * 0.137F;
+    return SmoothNoise{SmoothNoise::Configuration{
+        .seed = random_.bits(),
+        .correlation_time = random_.range(correlation_time) + channel_offset,
+    }};
+  }
+
+  [[nodiscard]] ScalarMotion scalar(const ScalarRequest &request) {
+    const auto span = request.range.span();
+    return ScalarMotion{
+        .value = std::clamp(request.equilibrium + range({-0.06F, 0.06F}) * span,
+                            request.range.minimum, request.range.maximum),
+        .velocity = range({-0.002F, 0.002F}) * span,
+        .equilibrium = request.equilibrium,
+        .range = request.range,
+        .drive = range(request.drive),
+        .restoring = range(request.restoring),
+        .damping = range(request.damping),
+        .noise = noise(request.correlation_time),
+    };
+  }
+
+  [[nodiscard]] Singularity singularity(Vec2 placement) {
+    return Singularity{
+        .drift =
+            PlanarMotion{
+                .position = (placement * 2.0F - Vec2{1.0F, 1.0F}) * field_domain_scale,
+                .velocity = Vec2{range({-0.0035F, 0.0035F}), range({-0.0035F, 0.0035F})},
+                .noise_x = noise({8.0F, 18.0F}),
+                .noise_y = noise({10.0F, 23.0F}),
+                .drive = range({0.0030F, 0.0058F}),
+                .damping = range({0.24F, 0.40F}),
+            },
+        .strength = scalar({
+            .equilibrium = range({0.40F, 0.88F}),
+            .range = {0.26F, 0.98F},
+            .drive = {0.0018F, 0.0038F},
+            .restoring = {0.016F, 0.030F},
+            .damping = {0.16F, 0.28F},
+            .correlation_time = {13.0F, 31.0F},
+        }),
+        .rotation =
+            AngularMotion{
+                .orientation = range({0.0F, tau}),
+                .velocity = range({-0.0040F, 0.0040F}),
+                .drive = range({0.0013F, 0.0032F}),
+                .damping = range({0.11F, 0.22F}),
+                .noise = noise({17.0F, 39.0F}),
+            },
+        .anisotropy = scalar({
+            .equilibrium = range({0.78F, 1.34F}),
+            .range = {0.62F, 1.58F},
+            .drive = {0.0018F, 0.0042F},
+            .restoring = {0.013F, 0.026F},
+            .damping = {0.14F, 0.25F},
+            .correlation_time = {16.0F, 36.0F},
+        }),
+        .influence_radius = scalar({
+            .equilibrium = range({0.068F, 0.105F}),
+            .range = {0.052F, 0.128F},
+            .drive = {0.00016F, 0.00036F},
+            .restoring = {0.018F, 0.034F},
+            .damping = {0.16F, 0.28F},
+            .correlation_time = {19.0F, 43.0F},
+        }),
+    };
+  }
+
+private:
+  Random &random_;
+  std::size_t next_channel_{};
 };
 
 class FieldDynamics final {
 public:
   [[nodiscard]] static FieldDynamics random() {
     Random random{browser_random_state()};
-    FieldDynamics dynamics;
-    dynamics.center_count_ = sample_center_count(random);
-    const auto positions = sample_positions(random, dynamics.center_count_);
-    std::size_t noise_channel{};
+    const auto count = sample_center_count(random);
+    const auto placements = sample_placements(random, count);
 
-    for (std::size_t index = 0; index < dynamics.center_count_; ++index) {
-      auto &singularity = dynamics.singularities_[index];
-      singularity.position = NormalizedPoint{
-          .x = (positions[index].x * 2.0F - 1.0F) * field_domain_scale,
-          .y = (positions[index].y * 2.0F - 1.0F) * field_domain_scale,
-      };
-      singularity.velocity = NormalizedPoint{
-          .x = random.range(-0.0035F, 0.0035F),
-          .y = random.range(-0.0035F, 0.0035F),
-      };
-      singularity.force_x = make_noise(
-          random,
-          NoiseRequest{.minimum_time = 8.0F, .maximum_time = 18.0F, .channel = noise_channel++});
-      singularity.force_y = make_noise(
-          random,
-          NoiseRequest{.minimum_time = 10.0F, .maximum_time = 23.0F, .channel = noise_channel++});
-      singularity.force_scale = random.range(0.0030F, 0.0058F);
-      singularity.damping = random.range(0.24F, 0.40F);
-
-      singularity.strength =
-          make_scalar(random, ScalarRequest{
-                                  .equilibrium = random.range(0.40F, 0.88F),
-                                  .range = Bounds{.minimum = 0.26F, .maximum = 0.98F},
-                                  .drive = Bounds{.minimum = 0.0018F, .maximum = 0.0038F},
-                                  .restoring = Bounds{.minimum = 0.016F, .maximum = 0.030F},
-                                  .damping = Bounds{.minimum = 0.16F, .maximum = 0.28F},
-                                  .correlation_time = Bounds{.minimum = 13.0F, .maximum = 31.0F},
-                                  .noise_channel = noise_channel++,
-                              });
-      singularity.orientation = random.range(0.0F, tau);
-      singularity.angular_velocity = random.range(-0.0040F, 0.0040F);
-      singularity.angular_drive = random.range(0.0013F, 0.0032F);
-      singularity.angular_damping = random.range(0.11F, 0.22F);
-      singularity.orientation_force = make_noise(
-          random,
-          NoiseRequest{.minimum_time = 17.0F, .maximum_time = 39.0F, .channel = noise_channel++});
-      singularity.anisotropy =
-          make_scalar(random, ScalarRequest{
-                                  .equilibrium = random.range(0.78F, 1.34F),
-                                  .range = Bounds{.minimum = 0.62F, .maximum = 1.58F},
-                                  .drive = Bounds{.minimum = 0.0018F, .maximum = 0.0042F},
-                                  .restoring = Bounds{.minimum = 0.013F, .maximum = 0.026F},
-                                  .damping = Bounds{.minimum = 0.14F, .maximum = 0.25F},
-                                  .correlation_time = Bounds{.minimum = 16.0F, .maximum = 36.0F},
-                                  .noise_channel = noise_channel++,
-                              });
-      singularity.influence_radius =
-          make_scalar(random, ScalarRequest{
-                                  .equilibrium = random.range(0.068F, 0.105F),
-                                  .range = Bounds{.minimum = 0.052F, .maximum = 0.128F},
-                                  .drive = Bounds{.minimum = 0.00016F, .maximum = 0.00036F},
-                                  .restoring = Bounds{.minimum = 0.018F, .maximum = 0.034F},
-                                  .damping = Bounds{.minimum = 0.16F, .maximum = 0.28F},
-                                  .correlation_time = Bounds{.minimum = 19.0F, .maximum = 43.0F},
-                                  .noise_channel = noise_channel++,
-                              });
+    MotionSampler sampler{random};
+    FieldDynamics dynamics{count};
+    for (const auto [singularity, placement] :
+         std::views::zip(dynamics.active(), std::span{placements}.first(count))) {
+      singularity = sampler.singularity(placement);
     }
-
     dynamics.refresh_uniforms();
     return dynamics;
   }
@@ -291,210 +395,99 @@ public:
   [[nodiscard]] GLsizei center_count() const { return static_cast<GLsizei>(center_count_); }
 
 private:
-  using PositionValues = std::array<GLfloat, maximum_center_count * 2U>;
-  using ParameterValues = std::array<GLfloat, maximum_center_count * 4U>;
+  using Placements = std::array<Vec2, maximum_center_count>;
   static constexpr int maximum_placement_attempts = 96;
 
-  FieldDynamics() = default;
+  explicit FieldDynamics(std::size_t center_count) : center_count_{center_count} {}
 
-  [[nodiscard]] static SmoothNoise make_noise(Random &random, NoiseRequest request) {
-    // The channel offset further separates already independent time scales.
-    const auto channel_offset = static_cast<float>(request.channel) * 0.137F;
-    return SmoothNoise{SmoothNoise::Configuration{
-        .seed = random.bits(),
-        .correlation_time =
-            random.range(request.minimum_time, request.maximum_time) + channel_offset,
-    }};
-  }
-
-  [[nodiscard]] static ScalarMotion make_scalar(Random &random, ScalarRequest request) {
-    const auto span = request.range.maximum - request.range.minimum;
-    return ScalarMotion{
-        .value = std::clamp(request.equilibrium + random.range(-0.06F, 0.06F) * span,
-                            request.range.minimum, request.range.maximum),
-        .velocity = random.range(-0.002F, 0.002F) * span,
-        .equilibrium = request.equilibrium,
-        .minimum = request.range.minimum,
-        .maximum = request.range.maximum,
-        .drive = random.range(request.drive.minimum, request.drive.maximum),
-        .restoring = random.range(request.restoring.minimum, request.restoring.maximum),
-        .damping = random.range(request.damping.minimum, request.damping.maximum),
-        .noise = make_noise(random, NoiseRequest{.minimum_time = request.correlation_time.minimum,
-                                                 .maximum_time = request.correlation_time.maximum,
-                                                 .channel = request.noise_channel}),
-    };
+  [[nodiscard]] std::span<Singularity> active() {
+    return std::span{singularities_}.first(center_count_);
   }
 
   [[nodiscard]] static std::size_t sample_center_count(Random &random) {
     const auto sample = random.unit();
-    std::size_t count{1U};
-    for (const auto probability : center_count_cumulative_probabilities) {
-      if (sample < probability) {
-        return count;
-      }
-      ++count;
-    }
-    return maximum_center_count;
+    const auto below = std::ranges::upper_bound(center_count_cumulative_probabilities, sample);
+    return static_cast<std::size_t>(below - center_count_cumulative_probabilities.begin()) + 1U;
   }
 
-  [[nodiscard]] static std::array<NormalizedPoint, maximum_center_count>
-  sample_positions(Random &random, std::size_t center_count) {
-    std::array<NormalizedPoint, maximum_center_count> positions{};
+  [[nodiscard]] static Placements sample_placements(Random &random, std::size_t center_count) {
+    Placements placements{};
     for (std::size_t index = 0; index < center_count; ++index) {
-      const auto position = sample_position(
-          random, PlacementRequest{.positions = &positions, .populated_count = index});
-      if (!position) {
+      const auto placement = sample_placement(random, std::span{placements}.first(index));
+      if (!placement) {
         return fallback_positions;
       }
-      positions[index] = *position;
+      placements[index] = *placement;
     }
-    return positions;
+    return placements;
   }
 
-  struct PlacementRequest final {
-    const std::array<NormalizedPoint, maximum_center_count> *positions;
-    std::size_t populated_count;
-  };
-
-  [[nodiscard]] static std::optional<NormalizedPoint> sample_position(Random &random,
-                                                                      PlacementRequest request) {
+  [[nodiscard]] static std::optional<Vec2> sample_placement(Random &random,
+                                                            std::span<const Vec2> placed) {
     for (auto attempt = 0; attempt < maximum_placement_attempts; ++attempt) {
-      const NormalizedPoint candidate{
-          .x = placement_left + (placement_right - placement_left) * random.unit(),
-          .y = placement_top + (placement_bottom - placement_top) * random.unit(),
-      };
-      auto separated = true;
-      for (std::size_t previous = 0; previous < request.populated_count; ++previous) {
-        const auto delta_x = candidate.x - (*request.positions)[previous].x;
-        const auto delta_y = candidate.y - (*request.positions)[previous].y;
-        if (delta_x * delta_x + delta_y * delta_y < minimum_center_distance_squared) {
-          separated = false;
-          break;
-        }
-      }
-      if (separated) {
+      const Vec2 candidate{random.range(placement_x), random.range(placement_y)};
+      if (is_placeable(candidate, placed)) {
         return candidate;
       }
     }
     return std::nullopt;
   }
 
-  [[nodiscard]] static float boundary_force(float value, Bounds bounds) {
-    if (value < bounds.minimum) {
-      return boundary_stiffness * (bounds.minimum - value);
-    }
-    if (value > bounds.maximum) {
-      return -boundary_stiffness * (value - bounds.maximum);
-    }
-    return 0.0F;
-  }
+  void integrate(float duration) {
+    const auto singularities = active();
+    const TimeStep step{.time = simulation_time_, .duration = duration};
 
-  struct IntegrationInterval final {
-    double time;
-    float step;
-  };
-
-  static void integrate_scalar(ScalarMotion &motion, IntegrationInterval interval) {
-    auto acceleration = motion.drive * motion.noise.sample(interval.time) -
-                        motion.restoring * (motion.value - motion.equilibrium) -
-                        motion.damping * motion.velocity;
-    acceleration += boundary_stiffness * 2.0F *
-                    ((motion.value < motion.minimum)
-                         ? motion.minimum - motion.value
-                         : (motion.value > motion.maximum ? motion.maximum - motion.value : 0.0F));
-    motion.velocity += acceleration * interval.step;
-    motion.value += motion.velocity * interval.step;
-
-    const auto safety_margin = 0.25F * (motion.maximum - motion.minimum);
-    motion.value =
-        std::clamp(motion.value, motion.minimum - safety_margin, motion.maximum + safety_margin);
-  }
-
-  void integrate(float step) {
-    std::array<NormalizedPoint, maximum_center_count> accelerations{};
-    for (std::size_t index = 0; index < center_count_; ++index) {
-      const auto &singularity = singularities_[index];
-      accelerations[index] = NormalizedPoint{
-          .x = singularity.force_scale * singularity.force_x.sample(simulation_time_) +
-               boundary_force(singularity.position.x, horizontal_boundaries) -
-               singularity.damping * singularity.velocity.x,
-          .y = singularity.force_scale * singularity.force_y.sample(simulation_time_) +
-               boundary_force(singularity.position.y, vertical_boundaries) -
-               singularity.damping * singularity.velocity.y,
-      };
+    std::array<Vec2, maximum_center_count> accelerations{};
+    for (std::size_t index = 0; index < singularities.size(); ++index) {
+      accelerations[index] = singularities[index].drift.acceleration(step.time);
     }
 
-    const auto interaction_radius_squared = interaction_radius * interaction_radius;
-    for (std::size_t first = 0; first < center_count_; ++first) {
-      for (std::size_t second = first + 1U; second < center_count_; ++second) {
-        const auto delta_x = singularities_[first].position.x - singularities_[second].position.x;
-        const auto delta_y = singularities_[first].position.y - singularities_[second].position.y;
-        const auto distance_squared = delta_x * delta_x + delta_y * delta_y;
+    constexpr auto interaction_radius_squared = interaction_radius * interaction_radius;
+    for (std::size_t first = 0; first < singularities.size(); ++first) {
+      for (std::size_t second = first + 1U; second < singularities.size(); ++second) {
+        const auto delta =
+            singularities[first].drift.position - singularities[second].drift.position;
+        const auto distance_squared = length_squared(delta);
         if (distance_squared >= interaction_radius_squared) {
           continue;
         }
 
         const auto distance = std::sqrt(std::max(distance_squared, 0.000001F));
         const auto proximity = 1.0F - distance / interaction_radius;
-        const auto magnitude = interaction_strength * proximity * proximity;
-        const auto direction_x = distance_squared > 0.000001F ? delta_x / distance : 1.0F;
-        const auto direction_y = distance_squared > 0.000001F ? delta_y / distance : 0.0F;
-        accelerations[first].x += direction_x * magnitude;
-        accelerations[first].y += direction_y * magnitude;
-        accelerations[second].x -= direction_x * magnitude;
-        accelerations[second].y -= direction_y * magnitude;
+        const auto direction = distance_squared > 0.000001F ? delta / distance : Vec2{1.0F, 0.0F};
+        const auto repulsion = direction * (interaction_strength * proximity * proximity);
+        accelerations[first] += repulsion;
+        accelerations[second] -= repulsion;
       }
     }
 
-    for (std::size_t index = 0; index < center_count_; ++index) {
-      auto &singularity = singularities_[index];
-      singularity.velocity.x += accelerations[index].x * step;
-      singularity.velocity.y += accelerations[index].y * step;
-      const auto speed_squared = singularity.velocity.x * singularity.velocity.x +
-                                 singularity.velocity.y * singularity.velocity.y;
-      if (speed_squared > maximum_drift_speed * maximum_drift_speed) {
-        const auto scale = maximum_drift_speed / std::sqrt(speed_squared);
-        singularity.velocity.x *= scale;
-        singularity.velocity.y *= scale;
-      }
-      singularity.position.x += singularity.velocity.x * step;
-      singularity.position.y += singularity.velocity.y * step;
-
-      const IntegrationInterval interval{.time = simulation_time_, .step = step};
-      integrate_scalar(singularity.strength, interval);
-      integrate_scalar(singularity.anisotropy, interval);
-      integrate_scalar(singularity.influence_radius, interval);
-      const auto angular_acceleration =
-          singularity.angular_drive * singularity.orientation_force.sample(simulation_time_) -
-          singularity.angular_damping * singularity.angular_velocity;
-      singularity.angular_velocity += angular_acceleration * step;
-      singularity.orientation += singularity.angular_velocity * step;
-      if (singularity.orientation < 0.0F || singularity.orientation >= tau) {
-        singularity.orientation = std::fmod(singularity.orientation, tau);
-        if (singularity.orientation < 0.0F) {
-          singularity.orientation += tau;
-        }
-      }
+    for (std::size_t index = 0; index < singularities.size(); ++index) {
+      auto &singularity = singularities[index];
+      singularity.drift.integrate(accelerations[index], duration);
+      singularity.strength.integrate(step);
+      singularity.anisotropy.integrate(step);
+      singularity.influence_radius.integrate(step);
+      singularity.rotation.integrate(step);
     }
-    simulation_time_ += static_cast<double>(step);
+    simulation_time_ += static_cast<double>(duration);
   }
 
   void refresh_uniforms() {
-    for (std::size_t index = 0; index < center_count_; ++index) {
-      const auto &singularity = singularities_[index];
-      position_values_[index * 2U] = singularity.position.x;
-      position_values_[index * 2U + 1U] = singularity.position.y;
+    for (std::size_t index = 0; const auto &singularity : active()) {
+      position_values_[index * 2U] = singularity.drift.position.x;
+      position_values_[index * 2U + 1U] = singularity.drift.position.y;
       parameter_values_[index * 4U] = singularity.strength.value;
-      parameter_values_[index * 4U + 1U] = singularity.orientation;
+      parameter_values_[index * 4U + 1U] = singularity.rotation.orientation;
       parameter_values_[index * 4U + 2U] = singularity.anisotropy.value;
       parameter_values_[index * 4U + 3U] = singularity.influence_radius.value;
+      ++index;
     }
   }
 
-  std::array<Singularity, maximum_center_count> singularities_;
-  PositionValues position_values_{};
-  ParameterValues parameter_values_{};
-  std::size_t center_count_{};
+  std::array<Singularity, maximum_center_count> singularities_{};
+  std::array<GLfloat, maximum_center_count * 2U> position_values_{};
+  std::array<GLfloat, maximum_center_count * 4U> parameter_values_{};
+  std::size_t center_count_;
   double simulation_time_{};
 };
 
@@ -644,8 +637,7 @@ private:
 
 class Pipeline final {
 public:
-  [[nodiscard]] static std::optional<Pipeline> create(const FieldDynamics &dynamics,
-                                                      const CanvasExtent &extent) {
+  [[nodiscard]] static std::optional<Pipeline> create(GLsizei center_count) {
     auto vertex_shader = Shader::compile(ShaderStage::vertex, portfolio::shaders::vertex);
     if (!vertex_shader) {
       return std::nullopt;
@@ -694,21 +686,13 @@ public:
       return std::nullopt;
     }
 
-    Pipeline pipeline{
-        Handles{.program = program, .vertex_array = vertex_array},
-        uniforms,
-    };
-    // This is the renderer's only pipeline, so its program and vertex array stay bound.
-    pipeline.bind();
-    glDisable(GL_BLEND);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_STENCIL_TEST);
-    glUniform2f(uniforms.resolution, extent.width_as_float(), extent.height_as_float());
-    glUniform2fv(uniforms.poles, dynamics.center_count(), dynamics.positions());
-    glUniform4fv(uniforms.singularities, dynamics.center_count(), dynamics.parameters());
-    glUniform1i(uniforms.center_count, dynamics.center_count());
-    return pipeline;
+    // This is the renderer's only pipeline, so its program and vertex array stay
+    // bound. Blending, culling, depth, and stencil tests start disabled. The
+    // resolution and field uniforms are set before the first draw.
+    glUseProgram(program);
+    glBindVertexArray(vertex_array);
+    glUniform1i(uniforms.center_count, center_count);
+    return Pipeline{Handles{.program = program, .vertex_array = vertex_array}, uniforms};
   }
 
   Pipeline(const Pipeline &) = delete;
@@ -756,11 +740,6 @@ private:
 
   Pipeline(Handles handles, Uniforms uniforms)
       : program_{handles.program}, vertex_array_{handles.vertex_array}, uniforms_{uniforms} {}
-
-  void bind() const {
-    glUseProgram(program_);
-    glBindVertexArray(vertex_array_);
-  }
 
   GLuint program_;
   GLuint vertex_array_;
@@ -815,7 +794,7 @@ private:
       return std::nullopt;
     }
     auto dynamics = FieldDynamics::random();
-    auto pipeline = Pipeline::create(dynamics, *extent);
+    auto pipeline = Pipeline::create(dynamics.center_count());
     if (!pipeline) {
       return std::nullopt;
     }
@@ -833,18 +812,14 @@ private:
       return false;
     }
 
-    if (motion_mode_ == MotionMode::reduced) {
-      pipeline_.draw(dynamics_);
-      return true;
-    }
-
-    last_animation_timestamp_ = emscripten_get_now();
     pipeline_.draw(dynamics_);
-    emscripten_request_animation_frame_loop(on_animation_frame, this);
+    if (motion_mode_ == MotionMode::animated) {
+      last_animation_timestamp_ = emscripten_get_now();
+      emscripten_request_animation_frame_loop(on_animation_frame, this);
+    }
     return true;
   }
 
-private:
   Renderer(WebGlContext context, Pipeline pipeline, const FieldDynamics &dynamics,
            CanvasExtent extent, MotionMode motion_mode)
       : context_{std::move(context)}, pipeline_{std::move(pipeline)}, dynamics_{dynamics},
