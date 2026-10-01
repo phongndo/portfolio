@@ -77,10 +77,59 @@ struct Bounds final {
   }
 };
 
-constexpr Bounds placement_x{.minimum = 0.32F, .maximum = 0.92F};
+// Placements are fractions of the canvas; boundaries are field coordinates.
+constexpr Bounds fallback_placement_x{.minimum = 0.32F, .maximum = 0.92F};
 constexpr Bounds placement_y{.minimum = 0.08F, .maximum = 0.92F};
-constexpr Bounds boundary_x{.minimum = -0.76F, .maximum = 1.00F};
 constexpr Bounds boundary_y{.minimum = -1.00F, .maximum = 1.00F};
+constexpr float default_text_edge = 0.40F;
+constexpr float text_clearance = 0.06F;
+constexpr float minimum_placement_width = 0.30F;
+
+[[nodiscard]] constexpr float field_coordinate(float canvas_fraction) {
+  return (canvas_fraction * 2.0F - 1.0F) * field_domain_scale;
+}
+
+// Singularities are placed and held to the right of the left-aligned text
+// column. When the column fills a narrow screen, they sit at the right edge,
+// partly off canvas, so only their outer field lines cross the text.
+struct FieldLayout final {
+  float text_edge;
+  Bounds placement_x;
+  Bounds boundary_x;
+
+  [[nodiscard]] static constexpr FieldLayout beside(float text_edge) {
+    const auto minimum = std::clamp(text_edge + text_clearance, 0.32F, 0.80F);
+    const Bounds placement{
+        .minimum = minimum,
+        .maximum = std::max(0.92F, minimum + minimum_placement_width),
+    };
+    return FieldLayout{
+        .text_edge = text_edge,
+        .placement_x = placement,
+        .boundary_x = {.minimum = field_coordinate(placement.minimum) - 0.08F,
+                       .maximum = field_coordinate(placement.maximum) + 0.09F},
+    };
+  }
+};
+
+// The right edge of the text column as a fraction of the canvas width.
+[[nodiscard]] float measure_text_edge() {
+  const auto edge = EM_ASM_DOUBLE({
+    var canvas = document.querySelector("#background");
+    var column = document.querySelector(".terminal");
+    if (!canvas || !column) {
+      return NaN;
+    }
+    var canvas_rect = canvas.getBoundingClientRect();
+    var column_rect = column.getBoundingClientRect();
+    return (column_rect.right - canvas_rect.left) / canvas_rect.width;
+  });
+  if (!std::isfinite(edge)) {
+    emscripten_log(EM_LOG_WARN, "Unable to measure the text column");
+    return default_text_edge;
+  }
+  return std::clamp(static_cast<float>(edge), 0.0F, 1.0F);
+}
 
 constexpr std::array fallback_positions{
     Vec2{0.36F, 0.18F}, Vec2{0.65F, 0.15F}, Vec2{0.90F, 0.24F}, Vec2{0.40F, 0.58F},
@@ -94,7 +143,8 @@ constexpr std::array center_count_cumulative_probabilities{
     0.00194628F, 0.02022834F, 0.11077998F, 0.34727336F, 0.67295498F, 0.90944836F,
 };
 
-[[nodiscard]] constexpr bool is_placeable(Vec2 candidate, std::span<const Vec2> placed) {
+[[nodiscard]] constexpr bool is_placeable(Vec2 candidate, Bounds placement_x,
+                                          std::span<const Vec2> placed) {
   return placement_x.contains(candidate.x) && placement_y.contains(candidate.y) &&
          std::ranges::none_of(placed, [candidate](Vec2 other) {
            return length_squared(candidate - other) < minimum_center_distance_squared;
@@ -104,7 +154,7 @@ constexpr std::array center_count_cumulative_probabilities{
 [[nodiscard]] constexpr bool valid_fallback_positions() {
   const std::span positions{fallback_positions};
   for (std::size_t index = 0; index < positions.size(); ++index) {
-    if (!is_placeable(positions[index], positions.first(index))) {
+    if (!is_placeable(positions[index], fallback_placement_x, positions.first(index))) {
       return false;
     }
   }
@@ -244,7 +294,7 @@ struct PlanarMotion final {
   float drive;
   float damping;
 
-  [[nodiscard]] Vec2 acceleration(double time) const {
+  [[nodiscard]] Vec2 acceleration(double time, Bounds boundary_x) const {
     const Vec2 noise{noise_x.sample(time), noise_y.sample(time)};
     const Vec2 containment{
         boundary_stiffness * boundary_x.overshoot_correction(position.x),
@@ -365,13 +415,13 @@ private:
 
 class FieldDynamics final {
 public:
-  [[nodiscard]] static FieldDynamics random() {
+  [[nodiscard]] static FieldDynamics random(const FieldLayout &layout) {
     Random random{browser_random_state()};
     const auto count = sample_center_count(random);
-    const auto placements = sample_placements(random, count);
+    const auto placements = sample_placements(random, count, layout.placement_x);
 
     MotionSampler sampler{random};
-    FieldDynamics dynamics{count};
+    FieldDynamics dynamics{count, layout.boundary_x};
     for (const auto [singularity, placement] :
          std::views::zip(dynamics.active(), std::span{placements}.first(count))) {
       singularity = sampler.singularity(placement);
@@ -390,6 +440,8 @@ public:
     refresh_uniforms();
   }
 
+  void set_layout(const FieldLayout &layout) { boundary_x_ = layout.boundary_x; }
+
   [[nodiscard]] const GLfloat *positions() const { return position_values_.data(); }
   [[nodiscard]] const GLfloat *parameters() const { return parameter_values_.data(); }
   [[nodiscard]] GLsizei center_count() const { return static_cast<GLsizei>(center_count_); }
@@ -398,7 +450,8 @@ private:
   using Placements = std::array<Vec2, maximum_center_count>;
   static constexpr int maximum_placement_attempts = 96;
 
-  explicit FieldDynamics(std::size_t center_count) : center_count_{center_count} {}
+  FieldDynamics(std::size_t center_count, Bounds boundary_x)
+      : boundary_x_{boundary_x}, center_count_{center_count} {}
 
   [[nodiscard]] std::span<Singularity> active() {
     return std::span{singularities_}.first(center_count_);
@@ -410,23 +463,36 @@ private:
     return static_cast<std::size_t>(below - center_count_cumulative_probabilities.begin()) + 1U;
   }
 
-  [[nodiscard]] static Placements sample_placements(Random &random, std::size_t center_count) {
+  [[nodiscard]] static Placements sample_placements(Random &random, std::size_t center_count,
+                                                    Bounds placement_x) {
     Placements placements{};
     for (std::size_t index = 0; index < center_count; ++index) {
-      const auto placement = sample_placement(random, std::span{placements}.first(index));
+      const auto placement =
+          sample_placement(random, placement_x, std::span{placements}.first(index));
       if (!placement) {
-        return fallback_positions;
+        return fallback_placements(placement_x);
       }
       placements[index] = *placement;
     }
     return placements;
   }
 
-  [[nodiscard]] static std::optional<Vec2> sample_placement(Random &random,
+  // Stretches the fallback positions horizontally into the available range.
+  [[nodiscard]] static Placements fallback_placements(Bounds placement_x) {
+    Placements placements = fallback_positions;
+    for (auto &placement : placements) {
+      const auto fraction =
+          (placement.x - fallback_placement_x.minimum) / fallback_placement_x.span();
+      placement.x = placement_x.minimum + fraction * placement_x.span();
+    }
+    return placements;
+  }
+
+  [[nodiscard]] static std::optional<Vec2> sample_placement(Random &random, Bounds placement_x,
                                                             std::span<const Vec2> placed) {
     for (auto attempt = 0; attempt < maximum_placement_attempts; ++attempt) {
       const Vec2 candidate{random.range(placement_x), random.range(placement_y)};
-      if (is_placeable(candidate, placed)) {
+      if (is_placeable(candidate, placement_x, placed)) {
         return candidate;
       }
     }
@@ -439,7 +505,7 @@ private:
 
     std::array<Vec2, maximum_center_count> accelerations{};
     for (std::size_t index = 0; index < singularities.size(); ++index) {
-      accelerations[index] = singularities[index].drift.acceleration(step.time);
+      accelerations[index] = singularities[index].drift.acceleration(step.time, boundary_x_);
     }
 
     constexpr auto interaction_radius_squared = interaction_radius * interaction_radius;
@@ -487,6 +553,7 @@ private:
   std::array<Singularity, maximum_center_count> singularities_{};
   std::array<GLfloat, maximum_center_count * 2U> position_values_{};
   std::array<GLfloat, maximum_center_count * 4U> parameter_values_{};
+  Bounds boundary_x_;
   std::size_t center_count_;
   double simulation_time_{};
 };
@@ -671,6 +738,7 @@ public:
         .poles = glGetUniformLocation(program, "u_poles[0]"),
         .singularities = glGetUniformLocation(program, "u_singularities[0]"),
         .center_count = glGetUniformLocation(program, "u_center_count"),
+        .text_edge = glGetUniformLocation(program, "u_text_edge"),
     };
     if (!uniforms.valid()) {
       emscripten_log(EM_LOG_ERROR, "The shader program is missing required uniforms");
@@ -688,7 +756,7 @@ public:
 
     // This is the renderer's only pipeline, so its program and vertex array stay
     // bound. Blending, culling, depth, and stencil tests start disabled. The
-    // resolution and field uniforms are set before the first draw.
+    // resolution, layout, and field uniforms are set before the first draw.
     glUseProgram(program);
     glBindVertexArray(vertex_array);
     glUniform1i(uniforms.center_count, center_count);
@@ -715,6 +783,10 @@ public:
     glUniform2f(uniforms_.resolution, extent.width_as_float(), extent.height_as_float());
   }
 
+  void set_layout(const FieldLayout &layout) const {
+    glUniform1f(uniforms_.text_edge, layout.text_edge);
+  }
+
   void draw(const FieldDynamics &dynamics) const {
     glUniform2fv(uniforms_.poles, dynamics.center_count(), dynamics.positions());
     glUniform4fv(uniforms_.singularities, dynamics.center_count(), dynamics.parameters());
@@ -732,9 +804,11 @@ private:
     GLint poles;
     GLint singularities;
     GLint center_count;
+    GLint text_edge;
 
     [[nodiscard]] bool valid() const {
-      return resolution >= 0 && poles >= 0 && singularities >= 0 && center_count >= 0;
+      return resolution >= 0 && poles >= 0 && singularities >= 0 && center_count >= 0 &&
+             text_edge >= 0;
     }
   };
 
@@ -793,7 +867,7 @@ private:
     if (!extent) {
       return std::nullopt;
     }
-    auto dynamics = FieldDynamics::random();
+    auto dynamics = FieldDynamics::random(FieldLayout::beside(measure_text_edge()));
     auto pipeline = Pipeline::create(dynamics.center_count());
     if (!pipeline) {
       return std::nullopt;
@@ -833,6 +907,10 @@ private:
     }
     glViewport(0, 0, extent.width(), extent.height());
     pipeline_.set_resolution(extent);
+    // The text column only moves when the viewport, and so the canvas, resizes.
+    const auto layout = FieldLayout::beside(measure_text_edge());
+    pipeline_.set_layout(layout);
+    dynamics_.set_layout(layout);
     extent_ = extent;
     return true;
   }

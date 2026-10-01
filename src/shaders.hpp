@@ -107,6 +107,8 @@ precision highp int;
 
 uniform vec2 u_resolution;
 uniform int u_center_count;
+// The right edge of the left-aligned text column, as a fraction of the width.
+uniform float u_text_edge;
 
 flat in vec4 v_poles01;
 flat in vec4 v_poles23;
@@ -126,6 +128,9 @@ out vec4 fragment_color;
 
 const float line_density = 96.0;
 const float phase_weight = 0.5;
+const float phase_seam = phase_weight * line_density;
+// Line profiles in pixels: a solid core of the given thickness, then a falloff.
+const float line_falloff = 1.20;
 const float tau = 6.283185307179586;
 
 vec2 complex_multiply(vec2 a, vec2 b) {
@@ -148,20 +153,30 @@ float anisotropic_distance_squared(
   return along * along / shape + across * across * shape;
 }
 
-float contour(float value, float thickness) {
-  float signal = sin(3.141592653589793 * value);
-  float width = max(fwidth(signal), 0.0007);
-  float line = 1.0 - smoothstep(width * thickness, width * (thickness + 0.95), abs(signal));
-  float frequency_visibility =
-      1.0 - 0.45 * smoothstep(0.45, 0.95, fwidth(value));
-  return line * frequency_visibility;
+// Lines sit at integer values. `seam` is the jump in `value` across the
+// phase branch cut; removing it from the derivatives keeps the cut invisible.
+vec2 seamless_gradient(float value, float seam) {
+  vec2 gradient = vec2(dFdx(value), dFdy(value));
+  return gradient - seam * round(gradient / seam);
 }
 
-float density_tone(float coordinate) {
+float contour(float value, float thickness, float seam) {
+  // The footprint is the value change across one pixel, so the distance below
+  // is measured in pixels and every line has the same width in any direction.
+  float footprint = max(length(seamless_gradient(value, seam)), 0.00001);
+  float distance = abs(fract(value + 0.5) - 0.5) / footprint;
+  float line = 1.0 - smoothstep(thickness, thickness + line_falloff, distance);
+
+  // Once lines approach pixel spacing they can no longer be resolved, so
+  // converge to their mean coverage instead of aliasing into moire.
+  float mean_coverage = min((2.0 * thickness + line_falloff) * footprint, 1.0);
+  return mix(line, mean_coverage, smoothstep(0.30, 0.75, footprint));
+}
+
+float density_tone(float coordinate, float seam) {
   // For level-set contours, |gradient(coordinate)| is the reciprocal distance
   // to the neighboring line in pixels and the magnitude of the induced field.
-  vec2 gradient = vec2(dFdx(coordinate), dFdy(coordinate));
-  float inverse_spacing = length(gradient);
+  float inverse_spacing = length(seamless_gradient(coordinate, seam));
   float compression = inverse_spacing / (inverse_spacing + 0.15);
   return mix(0.68, 1.50, compression);
 }
@@ -381,17 +396,18 @@ void main() {
       0.78,
       1.06);
 
-  float fine_lines = contour(line_coordinate, 0.21 * width_variation);
-  float middle_lines = contour(line_coordinate / 3.0, 0.18 * width_variation);
-  float major_lines = contour(line_coordinate / 8.0, 0.15 * width_variation);
+  float fine_lines = contour(line_coordinate, 0.27 * width_variation, phase_seam);
+  float middle_lines = contour(line_coordinate / 3.0, 0.23 * width_variation, phase_seam / 3.0);
+  float major_lines = contour(line_coordinate / 8.0, 0.19 * width_variation, phase_seam / 8.0);
 
-  float local_density = density_tone(line_coordinate);
+  float local_density = density_tone(line_coordinate, phase_seam);
   float structure = opacity_variation * local_density * singularity_contrast * (
       fine_lines * 0.0520 +
       middle_lines * 0.0320 +
       major_lines * 0.0740);
 
-  float left_contrast = mix(0.74, 1.0, smoothstep(0.28, 0.52, uv.x));
+  float text_contrast =
+      mix(0.74, 1.0, smoothstep(u_text_edge - 0.05, u_text_edge + 0.10, uv.x));
   vec2 edge_in = smoothstep(vec2(0.0), vec2(0.055), uv);
   vec2 edge_out = smoothstep(vec2(0.0), vec2(0.055), 1.0 - uv);
   float edge_contrast =
@@ -399,7 +415,7 @@ void main() {
 
   float field_luminance = 1.68 * structure;
   float luminance =
-      min(0.6200, 0.0314 + field_luminance * left_contrast * edge_contrast);
+      min(0.6200, 0.0314 + field_luminance * text_contrast * edge_contrast);
   fragment_color = vec4(vec3(luminance), 1.0);
 }
 )glsl";
