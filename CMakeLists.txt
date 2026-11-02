@@ -76,13 +76,15 @@ if(EMSCRIPTEN)
     file(REMOVE ${STALE_ASSETS})
   endif()
 
-  # Indentation carries no meaning in the page or its styles, so it is not shipped.
+  # Indentation, and line breaks between tags, carry no meaning in the page or its styles, so they
+  # are not shipped.
   configure_file("${PROJECT_SOURCE_DIR}/web/index.html" "${CMAKE_BINARY_DIR}/index.html" @ONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/styles.css" "${CMAKE_BINARY_DIR}/styles.css" COPYONLY)
   foreach(page_file IN ITEMS "index.html" "styles.css")
     file(READ "${CMAKE_BINARY_DIR}/${page_file}" PAGE)
     string(REGEX REPLACE "\n[ ]+" "\n" PAGE "${PAGE}")
     string(REGEX REPLACE "\n\n+" "\n" PAGE "${PAGE}")
+    string(REGEX REPLACE ">\n<" "><" PAGE "${PAGE}")
     if(page_file STREQUAL "styles.css")
       file(WRITE "${SITE_DIR}/${STYLE_NAME}" "${PAGE}")
     else()
