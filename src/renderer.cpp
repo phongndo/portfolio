@@ -84,6 +84,16 @@ constexpr double maximum_canvas_dimension = 8192.0;
 // Enough for a 5K display at its full device pixel ratio.
 constexpr double maximum_pixel_count = 16'000'000.0;
 constexpr double maximum_frame_step = 0.1;
+// The render scale adapts to how fast frames arrive: below the lower rate it
+// steps down, above the upper it steps back up, never below the minimum. It is
+// checked at most once per interval so that a change has time to show.
+constexpr double slow_frame_seconds = 1.0 / 50.0;
+constexpr double fast_frame_seconds = 1.0 / 58.0;
+constexpr double minimum_render_scale = 0.5;
+constexpr double render_scale_interval_milliseconds = 1500.0;
+// On narrow screens, once the text has scrolled this far over the sculpture,
+// in viewport heights, its motion pauses until the visitor scrolls back.
+constexpr float resting_scroll = 0.75F;
 constexpr int resize_settle_delay_milliseconds = 160;
 constexpr float default_text_edge = 0.40F;
 // Each visit starts somewhere within this many seconds of the scene's motion.
@@ -245,7 +255,9 @@ struct View final {
 
 class CanvasExtent final {
 public:
-  [[nodiscard]] static std::optional<CanvasExtent> measure() {
+  // The canvas size for its CSS box at the device pixel ratio, scaled by the
+  // render scale and within the pixel budget.
+  [[nodiscard]] static std::optional<CanvasExtent> measure(double render_scale) {
     double css_width{};
     double css_height{};
     if (emscripten_get_element_css_size(canvas_selector, &css_width, &css_height) !=
@@ -264,11 +276,10 @@ public:
     auto pixel_width = std::min(css_width, maximum_css_dimension) * device_pixel_ratio;
     auto pixel_height = std::min(css_height, maximum_css_dimension) * device_pixel_ratio;
     const auto pixel_count = pixel_width * pixel_height;
-    if (pixel_count > maximum_pixel_count) {
-      const auto render_scale = std::sqrt(maximum_pixel_count / pixel_count);
-      pixel_width *= render_scale;
-      pixel_height *= render_scale;
-    }
+    const auto budget_scale =
+        pixel_count > maximum_pixel_count ? std::sqrt(maximum_pixel_count / pixel_count) : 1.0;
+    pixel_width *= budget_scale * render_scale;
+    pixel_height *= budget_scale * render_scale;
 
     const auto width = std::max(1, static_cast<int>(std::lround(pixel_width)));
     const auto height = std::max(1, static_cast<int>(std::lround(pixel_height)));
@@ -545,7 +556,7 @@ private:
     if (!context) {
       return std::nullopt;
     }
-    const auto extent = CanvasExtent::measure();
+    const auto extent = CanvasExtent::measure(1.0);
     if (!extent) {
       return std::nullopt;
     }
@@ -589,13 +600,17 @@ private:
     }
     glViewport(0, 0, extent.width(), extent.height());
     // The text column only moves when the viewport, and so the canvas, resizes.
-    pipeline_.set_layout(extent, measure_text_edge());
+    const auto text_edge = measure_text_edge();
+    narrow_ = text_edge > 0.75F;
+    pipeline_.set_layout(extent, text_edge);
     extent_ = extent;
     return true;
   }
 
   [[nodiscard]] ResizeResult resize() {
-    const auto next_extent = CanvasExtent::measure();
+    // A new size gets a fresh chance at full resolution.
+    render_scale_ceiling_ = 1.0;
+    const auto next_extent = CanvasExtent::measure(render_scale_);
     if (!next_extent) {
       return ResizeResult::failed;
     }
@@ -610,13 +625,50 @@ private:
     const auto elapsed_seconds = (timestamp - renderer.last_animation_timestamp_) / 1000.0;
     renderer.last_animation_timestamp_ = timestamp;
     const auto turned = renderer.view_.follow(page_input, elapsed_seconds);
-    if (renderer.motion_mode_ == MotionMode::animated) {
+    const auto resting = renderer.narrow_ && renderer.view_.scroll > resting_scroll;
+    if (renderer.motion_mode_ == MotionMode::animated && !resting) {
       renderer.clock_.advance(elapsed_seconds);
+      renderer.adapt_render_scale({.timestamp = timestamp, .elapsed_seconds = elapsed_seconds});
     } else if (!turned) {
       return EM_TRUE;
     }
     renderer.pipeline_.draw(renderer.clock_, renderer.view_);
     return EM_TRUE;
+  }
+
+  // Lowers the render scale while frames arrive slowly and raises it again
+  // while they arrive quickly, but never back to a scale that was too slow
+  // until the canvas resizes.
+  struct Frame final {
+    // Milliseconds, as animation frames report them.
+    double timestamp;
+    double elapsed_seconds;
+  };
+
+  void adapt_render_scale(Frame frame) {
+    if (frame.elapsed_seconds <= 0.0 || frame.elapsed_seconds > 0.25) {
+      return;
+    }
+    frame_seconds_ += (frame.elapsed_seconds - frame_seconds_) * 0.05;
+    if (frame.timestamp < next_render_scale_check_) {
+      return;
+    }
+    next_render_scale_check_ = frame.timestamp + render_scale_interval_milliseconds;
+
+    auto next_scale = render_scale_;
+    if (frame_seconds_ > slow_frame_seconds) {
+      render_scale_ceiling_ = render_scale_ * 0.97;
+      next_scale = std::max(minimum_render_scale, render_scale_ * 0.85);
+    } else if (frame_seconds_ < fast_frame_seconds) {
+      next_scale = std::min(render_scale_ceiling_, render_scale_ * 1.08);
+    }
+    if (std::abs(next_scale - render_scale_) < 0.01) {
+      return;
+    }
+    render_scale_ = next_scale;
+    if (const auto extent = CanvasExtent::measure(render_scale_); extent && *extent != extent_) {
+      static_cast<void>(apply_extent(*extent));
+    }
   }
 
   static EM_BOOL on_resize(int, const EmscriptenUiEvent *, void *user_data) {
@@ -654,7 +706,12 @@ private:
   MotionMode motion_mode_;
   double last_animation_timestamp_{};
   double resize_after_timestamp_{};
+  double render_scale_{1.0};
+  double render_scale_ceiling_{1.0};
+  double frame_seconds_{1.0 / 60.0};
+  double next_render_scale_check_{};
   bool resize_scheduled_{};
+  bool narrow_{};
 };
 
 } // namespace
