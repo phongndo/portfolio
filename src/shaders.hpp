@@ -5,418 +5,197 @@ namespace portfolio::shaders {
 
 inline constexpr auto vertex = R"glsl(#version 300 es
 
-precision highp float;
-precision highp int;
-
-uniform vec2 u_resolution;
-uniform vec2 u_poles[7];
-uniform vec4 u_singularities[7];
-uniform int u_center_count;
-
-flat out vec4 v_poles01;
-flat out vec4 v_poles23;
-flat out vec4 v_poles45;
-flat out vec4 v_pole6_residue6;
-flat out vec4 v_transform;
-flat out vec4 v_residues01;
-flat out vec4 v_residues23;
-flat out vec4 v_residues45;
-flat out vec4 v_anisotropy0123;
-flat out vec3 v_anisotropy456;
-flat out vec4 v_radii0123;
-flat out vec3 v_radii456;
-flat out vec4 v_dynamics;
 const vec2 positions[3] = vec2[](
     vec2(-1.0, -1.0),
     vec2( 3.0, -1.0),
     vec2(-1.0,  3.0)
 );
 
-vec2 pole_position(int index) {
-  vec2 position = u_poles[index];
-  position.x *= u_resolution.x / u_resolution.y;
-  return position;
-}
-
-vec2 residue(vec4 singularity) {
-  float magnitude = 0.026 + 0.050 * singularity.x;
-  return magnitude * vec2(cos(singularity.y), sin(singularity.y));
-}
-
 void main() {
   gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
-
-  vec2 pole0 = pole_position(0);
-  vec2 pole1 = pole_position(1);
-  vec2 pole2 = pole_position(2);
-  vec2 pole3 = pole_position(3);
-  vec2 pole4 = pole_position(4);
-  vec2 pole5 = pole_position(5);
-  vec2 pole6 = pole_position(6);
-
-  vec4 singularity0 = u_singularities[0];
-  vec4 singularity1 = u_singularities[1];
-  vec4 singularity2 = u_singularities[2];
-  vec4 singularity3 = u_singularities[3];
-  vec4 singularity4 = u_singularities[4];
-  vec4 singularity5 = u_singularities[5];
-  vec4 singularity6 = u_singularities[6];
-
-  vec2 residue0 = residue(singularity0);
-  vec2 residue1 = residue(singularity1);
-  vec2 residue2 = residue(singularity2);
-  vec2 residue3 = residue(singularity3);
-  vec2 residue4 = residue(singularity4);
-  vec2 residue5 = residue(singularity5);
-  vec2 residue6 = residue(singularity6);
-
-  int last_index = max(u_center_count - 1, 0);
-  vec2 last_pole = pole_position(last_index);
-  vec4 last_singularity = u_singularities[last_index];
-  vec2 bend = vec2(
-      0.060 + 0.012 * (singularity0.z - 1.0),
-      0.020 * (last_singularity.z - 1.0));
-  vec2 offset = 0.006 * (pole0 + last_pole);
-
-  v_poles01 = vec4(pole0, pole1);
-  v_poles23 = vec4(pole2, pole3);
-  v_poles45 = vec4(pole4, pole5);
-  v_pole6_residue6 = vec4(pole6, residue6);
-  v_transform = vec4(bend, offset);
-  v_residues01 = vec4(residue0, residue1);
-  v_residues23 = vec4(residue2, residue3);
-  v_residues45 = vec4(residue4, residue5);
-  v_anisotropy0123 = vec4(
-      singularity0.z, singularity1.z, singularity2.z, singularity3.z);
-  v_anisotropy456 = vec3(singularity4.z, singularity5.z, singularity6.z);
-  v_radii0123 = vec4(
-      singularity0.w, singularity1.w, singularity2.w, singularity3.w);
-  v_radii456 = vec3(singularity4.w, singularity5.w, singularity6.w);
-  v_dynamics = vec4(
-      0.0045 + 0.0015 * 0.5 * (singularity0.x + last_singularity.x),
-      0.012 * (singularity0.z - last_singularity.z),
-      0.37 * singularity0.y + 0.63 * last_singularity.y + 0.08 * pole0.y,
-      0.61 * singularity0.y - 0.39 * last_singularity.y + 0.07 * last_pole.x);
 }
 )glsl";
 
+// A three-dimensional slice of a four-dimensional surface, the zero set of
+//   F(x, y, z, w) = G(x, y, z) cos w + P(x, y, z) sin w,
+// where G is Schoen's gyroid, sin x cos y + sin y cos z + sin z cos x, and P
+// is Schwarz's P surface, cos x + cos y + cos z, scaled to the same range.
+// The slice moves through the fourth dimension: it advances along w and tilts
+// in the x-w and y-w planes, so different parts of it sit at different w and
+// the surface turns from one shape into the other in waves across it. It is
+// drawn as a thin sheet cut to a sphere that holds still, unless the visitor
+// turns it; the motion through the fourth dimension turns with it.
 inline constexpr auto fragment = R"glsl(#version 300 es
 
 precision highp float;
-precision highp int;
 
 uniform vec2 u_resolution;
-uniform int u_center_count;
+// Seconds since an arbitrary start; it stands still when motion is reduced.
+uniform float u_time;
 // The right edge of the left-aligned text column, as a fraction of the width.
 uniform float u_text_edge;
-
-flat in vec4 v_poles01;
-flat in vec4 v_poles23;
-flat in vec4 v_poles45;
-flat in vec4 v_pole6_residue6;
-flat in vec4 v_transform;
-flat in vec4 v_residues01;
-flat in vec4 v_residues23;
-flat in vec4 v_residues45;
-flat in vec4 v_anisotropy0123;
-flat in vec3 v_anisotropy456;
-flat in vec4 v_radii0123;
-flat in vec3 v_radii456;
-flat in vec4 v_dynamics;
+// The sculpture's orientation, a rotation from its own axes to the view's,
+// built from the quaternion the visitor turns by dragging.
+uniform mat3 u_orientation;
+// How far the page has scrolled, in viewport heights.
+uniform float u_scroll;
 
 out vec4 fragment_color;
 
-const float line_density = 96.0;
-const float phase_weight = 0.5;
-const float phase_seam = phase_weight * line_density;
-// Line profiles in pixels: a solid core of the given thickness, then a falloff.
-const float line_falloff = 1.20;
-const float tau = 6.283185307179586;
+// The surfaces' frequency inside the unit sphere, and half the sheet's
+// thickness in units of F.
+const float frequency = 5.6;
+const float sheet = 0.11;
+const float camera_distance = 3.3;
+const float focal_length = 2.05;
+const int march_steps = 140;
 
-vec2 complex_multiply(vec2 a, vec2 b) {
-  return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+float gyroid(vec3 point) {
+  return dot(sin(point), cos(point.yzx));
 }
 
-vec2 complex_divide(vec2 a, vec2 b) {
-  return complex_multiply(a, vec2(b.x, -b.y)) / max(dot(b, b), 0.0001);
+float schwarz(vec3 point) {
+  return 0.5 * (cos(point.x) + cos(point.y) + cos(point.z));
 }
 
-float anisotropic_distance_squared(
-    vec2 delta,
-    vec2 orientation,
-    float anisotropy,
-    float magnitude_squared) {
-  vec2 direction = orientation * inversesqrt(max(magnitude_squared, 0.000001));
-  float along = dot(delta, direction);
-  float across = dot(delta, vec2(-direction.y, direction.x));
-  float shape = clamp(anisotropy, 0.55, 1.80);
-  return along * along / shape + across * across * shape;
+// The slice's place in four dimensions: cos and sin of its tilts in the x-w
+// and y-w planes, and its offset along w.
+vec4 tilt;
+float offset_w;
+
+float field(vec3 point) {
+  float x = point.x * tilt.x;
+  float w = point.x * tilt.y;
+  float y = point.y * tilt.z - w * tilt.w;
+  w = point.y * tilt.w + w * tilt.z + offset_w;
+  vec3 slice = vec3(x, y, point.z);
+  return gyroid(slice) * cos(w) + schwarz(slice) * sin(w);
 }
 
-// Lines sit at integer values. `seam` is the jump in `value` across the
-// phase branch cut; removing it from the derivatives keeps the cut invisible.
-vec2 seamless_gradient(float value, float seam) {
-  vec2 gradient = vec2(dFdx(value), dFdy(value));
-  return gradient - seam * round(gradient / seam);
+// A distance bound to the sheet, and to the sheet cut by the unit sphere.
+// F's gradient is bounded and the tilt is a rotation, so a fraction of F's
+// distance from the sheet is a safe step.
+float sheet_distance(vec3 point) {
+  return 0.4 * (abs(field(frequency * point)) - sheet) / frequency;
 }
 
-float contour(float value, float thickness, float seam) {
-  // The footprint is the value change across one pixel, so the distance below
-  // is measured in pixels and every line has the same width in any direction.
-  float footprint = max(length(seamless_gradient(value, seam)), 0.00001);
-  float distance = abs(fract(value + 0.5) - 0.5) / footprint;
-  float line = 1.0 - smoothstep(thickness, thickness + line_falloff, distance);
-
-  // Once lines approach pixel spacing they can no longer be resolved, so
-  // converge to their mean coverage instead of aliasing into moire.
-  float mean_coverage = min((2.0 * thickness + line_falloff) * footprint, 1.0);
-  return mix(line, mean_coverage, smoothstep(0.30, 0.75, footprint));
+float sculpture(vec3 point) {
+  return max(sheet_distance(point), length(point) - 1.0);
 }
 
-float density_tone(float coordinate, float seam) {
-  // For level-set contours, |gradient(coordinate)| is the reciprocal distance
-  // to the neighboring line in pixels and the magnitude of the induced field.
-  float inverse_spacing = length(seamless_gradient(coordinate, seam));
-  float compression = inverse_spacing / (inverse_spacing + 0.15);
-  return mix(0.68, 1.50, compression);
-}
-
-float circulation_strength(float residue_magnitude, float radius, float anisotropy) {
-  float strength = clamp((residue_magnitude - 0.026) / 0.050, 0.0, 1.0);
-  float radius_variation = (radius - 0.085) * 0.018;
-  float shape_variation = (anisotropy - 1.0) * 0.0015;
-  return 0.0035 + 0.0070 * strength + radius_variation + shape_variation;
-}
-
-float pole_contrast(
-    float flow_distance,
-    float magnitude_squared,
-    float radius_squared) {
-  float normalized_distance = flow_distance / max(radius_squared, 0.000001);
-  float strength = smoothstep(0.0015, 0.0055, magnitude_squared);
-  float center_contrast = mix(0.42, 0.66, strength);
-  return mix(center_contrast, 1.0, smoothstep(0.035, 0.55, normalized_distance));
-}
-
-void accumulate_singularity(
-    vec2 delta,
-    vec2 residue,
-    float radius,
-    float anisotropy,
-    float circulation_direction,
-    inout vec2 field,
-    inout float circulation,
-    inout float contrast) {
-  float magnitude_squared = dot(residue, residue);
-  float distance_squared =
-      anisotropic_distance_squared(delta, residue, anisotropy, magnitude_squared);
-  float radius_squared = radius * radius;
-  vec2 inverse = vec2(delta.x, -delta.y) / (distance_squared + radius_squared);
-
-  field += complex_multiply(residue, inverse);
-  circulation += circulation_direction *
-      circulation_strength(sqrt(magnitude_squared), radius, anisotropy) *
-      0.5 * log(distance_squared + radius_squared);
-  contrast *= pole_contrast(distance_squared, magnitude_squared, radius_squared);
+vec3 sheet_normal(vec3 point) {
+  vec3 at = frequency * point;
+  const vec2 h = vec2(0.002, 0.0);
+  vec3 gradient = vec3(field(at + h.xyy) - field(at - h.xyy), field(at + h.yxy) - field(at - h.yxy),
+                       field(at + h.yyx) - field(at - h.yyx));
+  return normalize(sign(field(at)) * gradient);
 }
 
 void main() {
   vec2 uv = gl_FragCoord.xy / u_resolution;
-  vec2 z = uv * 2.0 - 1.0;
-  z.x *= u_resolution.x / u_resolution.y;
-  z *= 1.08;
+  float time = u_time;
+  offset_w = 0.16 * time;
+  float tilt_x = 0.60 * sin(0.070 * time);
+  float tilt_y = 0.50 * sin(0.053 * time + 1.3);
+  tilt = vec4(cos(tilt_x), sin(tilt_x), cos(tilt_y), sin(tilt_y));
 
-  // Two rotated, slowly drifting scales bend the domain without changing the
-  // topology or introducing an isotropic noise texture.
-  vec2 low_warp = vec2(
-      sin(0.72 * z.x + 1.05 * z.y + v_dynamics.z * 0.23),
-      sin(-0.91 * z.x + 0.64 * z.y + v_dynamics.w * 0.21));
-  vec2 medium_warp = vec2(
-      sin(2.40 * z.x - 1.70 * z.y + v_dynamics.w * 0.37),
-      sin(1.90 * z.x + 2.60 * z.y - v_dynamics.z * 0.33));
-  float low_variation = 0.5 * (low_warp.x + low_warp.y);
-  float medium_variation = 0.5 * (medium_warp.x + medium_warp.y);
-  vec2 q = z + 0.0090 * low_warp + 0.0032 * medium_warp;
+  // Beside the text on wide screens. On narrow ones the text fills the width,
+  // so the sculpture sits in the upper half, under the name, sized to the
+  // width; the text starts below it and scrolls over it.
+  float narrow = smoothstep(0.62, 0.80, u_text_edge);
+  float aspect = u_resolution.x / u_resolution.y;
+  vec2 center = mix(vec2(0.5 * (u_text_edge + 1.0) + 0.02, 0.5), vec2(0.5, 0.63), narrow);
+  float focal = focal_length * mix(1.0, 1.22 * aspect, narrow);
+  vec2 screen = (gl_FragCoord.xy - center * u_resolution) / (0.5 * u_resolution.y);
 
-  vec2 pole0 = v_poles01.xy;
-  vec2 pole1 = v_poles01.zw;
-  vec2 pole2 = v_poles23.xy;
-  vec2 pole3 = v_poles23.zw;
-  vec2 pole4 = v_poles45.xy;
-  vec2 pole5 = v_poles45.zw;
-  vec2 pole6 = v_pole6_residue6.xy;
-  vec2 bend = v_transform.xy;
-  vec2 offset = v_transform.zw;
+  // The camera looks down -z from +z. Rather than turn the sculpture, carry
+  // the camera into the sculpture's own axes, where its surface is defined.
+  mat3 to_sculpture = transpose(u_orientation);
+  vec3 eye = to_sculpture * vec3(0.0, 0.0, camera_distance);
+  vec3 right = to_sculpture * vec3(1.0, 0.0, 0.0);
+  vec3 up = to_sculpture * vec3(0.0, 1.0, 0.0);
+  vec3 forward = to_sculpture * vec3(0.0, 0.0, -1.0);
+  vec3 direction = normalize(focal * forward + screen.x * right + screen.y * up);
 
-  vec2 warped = complex_divide(q + offset, vec2(1.0, 0.0) + complex_multiply(bend, q));
-  vec2 delta0 = warped - pole0;
-  vec2 delta1 = warped - pole1;
-  vec2 delta2 = warped - pole2;
-  vec2 delta3 = warped - pole3;
-  vec2 delta4 = warped - pole4;
-  vec2 delta5 = warped - pole5;
-  vec2 delta6 = warped - pole6;
+  // March only inside the sphere that bounds the sculpture. Remember where
+  // the ray passed closest to the surface, relative to a pixel's width there,
+  // so silhouettes can be anti-aliased.
+  float along = -dot(eye, direction);
+  float miss_squared = dot(eye, eye) - along * along;
+  float pixel = 2.0 / (u_resolution.y * focal);
+  float shade = 0.0;
+  float halo = exp(-max(sqrt(max(miss_squared, 0.0)) - 1.0, 0.0) * 3.2);
+  if (miss_squared < 1.0) {
+    float depth = sqrt(1.0 - miss_squared);
+    float entry = along - depth;
+    float exit = along + depth;
+    float distance = entry;
+    bool hit = false;
+    float closest = 1.0e9;
+    float closest_distance = entry;
+    for (int index = 0; index < march_steps; ++index) {
+      float step_length = sculpture(eye + direction * distance);
+      float in_pixels = step_length / (pixel * distance);
+      if (in_pixels < closest) {
+        closest = in_pixels;
+        closest_distance = distance;
+      }
+      if (step_length < 0.0003) {
+        hit = true;
+        break;
+      }
+      distance += step_length;
+      if (distance > exit) {
+        break;
+      }
+    }
 
-  vec2 numerator = delta0;
-  vec2 denominator = vec2(1.0, 0.0);
-  if (u_center_count > 1) {
-    denominator = complex_multiply(denominator, delta1);
-  }
-  if (u_center_count > 2) {
-    numerator = complex_multiply(numerator, delta2);
-  }
-  if (u_center_count > 3) {
-    denominator = complex_multiply(denominator, delta3);
-  }
-  if (u_center_count > 4) {
-    numerator = complex_multiply(numerator, delta4);
-  }
-  if (u_center_count > 5) {
-    denominator = complex_multiply(denominator, delta5);
-  }
-  if (u_center_count > 6) {
-    numerator = complex_multiply(numerator, delta6);
-  }
-  vec2 rational_map = complex_divide(numerator, denominator);
-  float phase_turns = atan(rational_map.y, rational_map.x) / tau;
+    float coverage = hit ? 1.0 : 1.0 - smoothstep(0.0, 1.0, closest);
+    if (coverage > 0.0) {
+      float reached = hit ? distance : closest_distance;
+      vec3 point = eye + direction * reached;
+      // On the sphere's cut faces the normal is the sphere's; elsewhere it is
+      // the sheet's, facing the side the ray came from.
+      vec3 normal = length(point) - 1.0 > sheet_distance(point) ? normalize(point)
+                                                                 : sheet_normal(point);
+      if (dot(normal, direction) > 0.0) {
+        normal = -normal;
+      }
 
-  vec2 field = warped * vec2(0.33, 0.38);
-  float circulation = 0.0;
-  float singularity_contrast = 1.0;
-  accumulate_singularity(
-      delta0,
-      v_residues01.xy,
-      v_radii0123.x,
-      v_anisotropy0123.x,
-      1.0,
-      field,
-      circulation,
-      singularity_contrast);
-  if (u_center_count > 1) {
-    accumulate_singularity(
-        delta1,
-        v_residues01.zw,
-        v_radii0123.y,
-        v_anisotropy0123.y,
-        -1.0,
-        field,
-        circulation,
-        singularity_contrast);
-  }
-  if (u_center_count > 2) {
-    accumulate_singularity(
-        delta2,
-        v_residues23.xy,
-        v_radii0123.z,
-        v_anisotropy0123.z,
-        1.0,
-        field,
-        circulation,
-        singularity_contrast);
-  }
-  if (u_center_count > 3) {
-    accumulate_singularity(
-        delta3,
-        v_residues23.zw,
-        v_radii0123.w,
-        v_anisotropy0123.w,
-        -1.0,
-        field,
-        circulation,
-        singularity_contrast);
-  }
-  if (u_center_count > 4) {
-    accumulate_singularity(
-        delta4,
-        v_residues45.xy,
-        v_radii456.x,
-        v_anisotropy456.x,
-        1.0,
-        field,
-        circulation,
-        singularity_contrast);
-  }
-  if (u_center_count > 5) {
-    accumulate_singularity(
-        delta5,
-        v_residues45.zw,
-        v_radii456.y,
-        v_anisotropy456.y,
-        -1.0,
-        field,
-        circulation,
-        singularity_contrast);
-  }
-  if (u_center_count > 6) {
-    accumulate_singularity(
-        delta6,
-        v_pole6_residue6.zw,
-        v_radii456.z,
-        v_anisotropy456.z,
-        1.0,
-        field,
-        circulation,
-        singularity_contrast);
+      // Lights move with the camera: a dim key from the upper left, and a
+      // light behind the sculpture that catches its edges.
+      vec3 key = normalize(-0.55 * right + 0.70 * up - 0.45 * forward);
+      vec3 back = normalize(0.45 * right + 0.35 * up + 0.85 * forward);
+      // Occlusion: how open the space is just off the surface.
+      float occlusion = 0.0;
+      for (int sample_index = 1; sample_index <= 4; ++sample_index) {
+        float offset = 0.03 * float(sample_index);
+        occlusion += max(offset - sculpture(point + normal * offset), 0.0) / offset;
+      }
+      occlusion = clamp(1.0 - 0.34 * occlusion, 0.0, 1.0);
+      float diffuse = max(dot(normal, key), 0.0);
+      float facing = max(dot(normal, -direction), 0.0);
+      float rim = pow(1.0 - facing, 3.0) * (0.35 + 0.65 * max(dot(normal, back) + 0.4, 0.0));
+      float sheen = pow(max(dot(reflect(direction, normal), key), 0.0), 10.0);
+      // Surfaces deeper inside the sphere sit in shadow.
+      float inside = exp(-1.1 * (reached - entry));
+      shade = coverage * occlusion *
+          ((0.012 + 0.30 * diffuse * diffuse + 0.05 * sheen) * (0.35 + 0.65 * inside) +
+           0.34 * rim);
+    }
   }
 
-  float curvature =
-      sin(1.75 * field.x + 0.80 * warped.y + v_dynamics.z) *
-      sin(1.45 * field.y - 0.65 * warped.x + 0.20 * field.x * field.y + v_dynamics.w);
-  float density_variation =
-      sin(0.92 * field.x + 0.58 * warped.y + v_dynamics.z * 0.71) +
-      0.62 * sin(1.31 * field.y - 0.43 * warped.x + v_dynamics.w * 0.67);
-  float field_coupling = 0.105 + 0.007 * density_variation;
-  float stream =
-      phase_weight * phase_turns + 0.100 * warped.y + field_coupling * field.y + circulation +
-      v_dynamics.x * curvature + v_dynamics.y;
-
-  float phase_perturbation =
-      0.075 * sin(0.68 * field.x + 1.08 * warped.y + v_dynamics.z * 0.29) +
-      0.025 * sin(1.62 * field.y - 0.58 * field.x + v_dynamics.w * 0.27);
-  float regular_coordinate =
-      stream * line_density + 0.20 * curvature + 0.10 * density_variation +
-      phase_perturbation;
-
-  // The phase contributes exactly 48 levels per winding. Every modulation and
-  // hierarchy period divides 48, preserving continuity across the phase seam.
-  float spacing_phase = 0.62 * low_variation + 0.25 * curvature;
-  float line_coordinate =
-      regular_coordinate +
-      0.13 * sin(tau * regular_coordinate / 16.0 + spacing_phase) +
-      0.045 * sin(tau * regular_coordinate / 8.0 + 0.80 * medium_variation);
-
-  float width_variation = clamp(
-      1.0 + 0.10 * low_variation + 0.04 * medium_variation,
-      0.84,
-      1.16);
-  float opacity_variation = clamp(
-      0.92 +
-      0.09 * (0.65 * low_variation + 0.25 * curvature + 0.10 * medium_variation) +
-      0.035 * sin(tau * regular_coordinate / 12.0 + v_dynamics.w * 0.09),
-      0.78,
-      1.06);
-
-  float fine_lines = contour(line_coordinate, 0.27 * width_variation, phase_seam);
-  float middle_lines = contour(line_coordinate / 3.0, 0.23 * width_variation, phase_seam / 3.0);
-  float major_lines = contour(line_coordinate / 8.0, 0.19 * width_variation, phase_seam / 8.0);
-
-  float local_density = density_tone(line_coordinate, phase_seam);
-  float structure = opacity_variation * local_density * singularity_contrast * (
-      fine_lines * 0.0520 +
-      middle_lines * 0.0320 +
-      major_lines * 0.0740);
-
-  float text_contrast =
-      mix(0.74, 1.0, smoothstep(u_text_edge - 0.05, u_text_edge + 0.10, uv.x));
-  vec2 edge_in = smoothstep(vec2(0.0), vec2(0.055), uv);
-  vec2 edge_out = smoothstep(vec2(0.0), vec2(0.055), 1.0 - uv);
-  float edge_contrast =
-      0.82 + 0.18 * edge_in.x * edge_in.y * edge_out.x * edge_out.y;
-
-  float field_luminance = 1.68 * structure;
-  float luminance =
-      min(0.6200, 0.0314 + field_luminance * text_contrast * edge_contrast);
-  fragment_color = vec4(vec3(luminance), 1.0);
+  // The sculpture recedes behind the text: beside the column on wide screens,
+  // and as the text scrolls over it on narrow ones. Everything fades toward
+  // the frame, over a faint glow around the sculpture.
+  float beside = mix(0.30, 1.0, smoothstep(u_text_edge - 0.04, u_text_edge + 0.14, uv.x));
+  float under = mix(1.0, 0.28, smoothstep(0.06, 0.45, u_scroll));
+  float clearing = mix(beside, under, narrow);
+  vec2 edge_in = smoothstep(vec2(0.0), vec2(0.08), uv);
+  vec2 edge_out = smoothstep(vec2(0.0), vec2(0.08), 1.0 - uv);
+  float frame = 0.65 + 0.35 * edge_in.x * edge_in.y * edge_out.x * edge_out.y;
+  float background = 0.022 + 0.020 * halo * clearing;
+  fragment_color = vec4(vec3((background + shade * clearing) * frame), 1.0);
 }
 )glsl";
 

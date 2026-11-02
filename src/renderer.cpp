@@ -6,113 +6,90 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <numbers>
 #include <optional>
-#include <ranges>
-#include <span>
+#include <type_traits>
 #include <utility>
 
 #include <GLES3/gl3.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/html5.h>
 
+// Dragging turns the sculpture: anywhere right of the text column on wide
+// screens, anywhere but a link on narrow ones. On touch screens the page
+// still scrolls vertically, so a sideways swipe turns it. The listeners add
+// the drag, in CSS pixels, to the first two floats at input, which the
+// renderer consumes, and keep the scroll in the third.
+EM_JS(void, listen_to_page_script, (float *input), {
+  var base = input >> 2;
+  var frame = document.querySelector(".frame");
+  if (!frame) {
+    return;
+  }
+  var dragging = null;
+  var last_x = 0;
+  var last_y = 0;
+  var turnable = function(event) {
+    if (event.target.closest && event.target.closest("a")) {
+      return false;
+    }
+    var column = document.querySelector(".terminal");
+    if (!column || column.getBoundingClientRect().right > 0.75 * innerWidth) {
+      return true;
+    }
+    return event.clientX > column.getBoundingClientRect().right;
+  };
+  frame.addEventListener(
+      "pointerdown", function(event) {
+        if (event.button != 0 || !turnable(event)) {
+          return;
+        }
+        dragging = event.pointerId;
+        last_x = event.clientX;
+        last_y = event.clientY;
+        frame.setPointerCapture(dragging);
+        frame.style.cursor = "grabbing";
+        frame.style.userSelect = "none";
+      });
+  frame.addEventListener(
+      "pointermove", function(event) {
+        if (dragging == event.pointerId) {
+          HEAPF32[base] += event.clientX - last_x;
+          HEAPF32[base + 1] += event.clientY - last_y;
+          last_x = event.clientX;
+          last_y = event.clientY;
+        } else if (event.pointerType == "mouse") {
+          frame.style.cursor = turnable(event) ? "grab" : "";
+        }
+      });
+  var release = function(event) {
+    if (dragging == event.pointerId) {
+      dragging = null;
+      frame.style.cursor = "";
+      frame.style.userSelect = "";
+    }
+  };
+  frame.addEventListener("pointerup", release);
+  frame.addEventListener("pointercancel", release);
+  frame.addEventListener(
+      "scroll",
+      function() { HEAPF32[base + 2] = frame.scrollTop / Math.max(frame.clientHeight, 1); },
+      {passive : true});
+});
+
 namespace {
 
 constexpr auto canvas_selector = "#background";
 constexpr double maximum_device_pixel_ratio = 2.0;
 constexpr double maximum_canvas_dimension = 8192.0;
-constexpr double maximum_pixel_count = 5'000'000.0;
+// Enough for a 5K display at its full device pixel ratio.
+constexpr double maximum_pixel_count = 16'000'000.0;
 constexpr double maximum_frame_step = 0.1;
 constexpr int resize_settle_delay_milliseconds = 160;
-constexpr float maximum_integration_step = 1.0F / 60.0F;
-constexpr std::uint32_t fallback_random_state = 0x6D2B79F5U;
-constexpr std::size_t maximum_center_count = 7U;
-constexpr float minimum_center_distance = 0.21F;
-constexpr float minimum_center_distance_squared = minimum_center_distance * minimum_center_distance;
-constexpr float field_domain_scale = 1.08F;
-constexpr float boundary_stiffness = 0.055F;
-constexpr float interaction_radius = 0.24F;
-constexpr float interaction_strength = 0.006F;
-constexpr float maximum_drift_speed = 0.040F;
-constexpr float tau = 2.0F * std::numbers::pi_v<float>;
-
-struct Vec2 final {
-  float x{};
-  float y{};
-
-  friend constexpr Vec2 operator+(Vec2 lhs, Vec2 rhs) { return {lhs.x + rhs.x, lhs.y + rhs.y}; }
-  friend constexpr Vec2 operator-(Vec2 lhs, Vec2 rhs) { return {lhs.x - rhs.x, lhs.y - rhs.y}; }
-  friend constexpr Vec2 operator*(Vec2 vector, float scale) {
-    return {vector.x * scale, vector.y * scale};
-  }
-  friend constexpr Vec2 operator/(Vec2 vector, float divisor) {
-    return {vector.x / divisor, vector.y / divisor};
-  }
-  constexpr Vec2 &operator+=(Vec2 other) { return *this = *this + other; }
-  constexpr Vec2 &operator-=(Vec2 other) { return *this = *this - other; }
-  constexpr Vec2 &operator*=(float scale) { return *this = *this * scale; }
-};
-
-[[nodiscard]] constexpr float length_squared(Vec2 vector) {
-  return vector.x * vector.x + vector.y * vector.y;
-}
-
-struct Bounds final {
-  float minimum;
-  float maximum;
-
-  [[nodiscard]] constexpr float span() const { return maximum - minimum; }
-  [[nodiscard]] constexpr bool contains(float value) const {
-    return value >= minimum && value <= maximum;
-  }
-  // The signed distance that returns an outside value to the nearest bound.
-  [[nodiscard]] constexpr float overshoot_correction(float value) const {
-    if (value < minimum) {
-      return minimum - value;
-    }
-    if (value > maximum) {
-      return maximum - value;
-    }
-    return 0.0F;
-  }
-};
-
-// Placements are fractions of the canvas; boundaries are field coordinates.
-constexpr Bounds fallback_placement_x{.minimum = 0.32F, .maximum = 0.92F};
-constexpr Bounds placement_y{.minimum = 0.08F, .maximum = 0.92F};
-constexpr Bounds boundary_y{.minimum = -1.00F, .maximum = 1.00F};
 constexpr float default_text_edge = 0.40F;
-constexpr float text_clearance = 0.06F;
-constexpr float minimum_placement_width = 0.30F;
+// Each visit starts somewhere within this many seconds of the scene's motion.
+constexpr double maximum_start_offset_seconds = 900.0;
 
-[[nodiscard]] constexpr float field_coordinate(float canvas_fraction) {
-  return (canvas_fraction * 2.0F - 1.0F) * field_domain_scale;
-}
-
-// Singularities are placed and held to the right of the left-aligned text
-// column. When the column fills a narrow screen, they sit at the right edge,
-// partly off canvas, so only their outer field lines cross the text.
-struct FieldLayout final {
-  float text_edge;
-  Bounds placement_x;
-  Bounds boundary_x;
-
-  [[nodiscard]] static constexpr FieldLayout beside(float text_edge) {
-    const auto minimum = std::clamp(text_edge + text_clearance, 0.32F, 0.80F);
-    const Bounds placement{
-        .minimum = minimum,
-        .maximum = std::max(0.92F, minimum + minimum_placement_width),
-    };
-    return FieldLayout{
-        .text_edge = text_edge,
-        .placement_x = placement,
-        .boundary_x = {.minimum = field_coordinate(placement.minimum) - 0.08F,
-                       .maximum = field_coordinate(placement.maximum) + 0.09F},
-    };
-  }
-};
-
-// The right edge of the text column as a fraction of the canvas width.
+// The right edge of the left-aligned text column as a fraction of the canvas width.
 [[nodiscard]] float measure_text_edge() {
   const auto edge = EM_ASM_DOUBLE({
     var canvas = document.querySelector("#background");
@@ -131,64 +108,8 @@ struct FieldLayout final {
   return std::clamp(static_cast<float>(edge), 0.0F, 1.0F);
 }
 
-constexpr std::array fallback_positions{
-    Vec2{0.36F, 0.18F}, Vec2{0.65F, 0.15F}, Vec2{0.90F, 0.24F}, Vec2{0.40F, 0.58F},
-    Vec2{0.69F, 0.52F}, Vec2{0.88F, 0.80F}, Vec2{0.55F, 0.85F},
-};
-
-// A discretized normal distribution centered on five (sigma 1.25). About 80%
-// of visits receive four to six centers, while a single center occurs on about
-// one in every 500 visits.
-constexpr std::array center_count_cumulative_probabilities{
-    0.00194628F, 0.02022834F, 0.11077998F, 0.34727336F, 0.67295498F, 0.90944836F,
-};
-
-[[nodiscard]] constexpr bool is_placeable(Vec2 candidate, Bounds placement_x,
-                                          std::span<const Vec2> placed) {
-  return placement_x.contains(candidate.x) && placement_y.contains(candidate.y) &&
-         std::ranges::none_of(placed, [candidate](Vec2 other) {
-           return length_squared(candidate - other) < minimum_center_distance_squared;
-         });
-}
-
-[[nodiscard]] constexpr bool valid_fallback_positions() {
-  const std::span positions{fallback_positions};
-  for (std::size_t index = 0; index < positions.size(); ++index) {
-    if (!is_placeable(positions[index], fallback_placement_x, positions.first(index))) {
-      return false;
-    }
-  }
-  return true;
-}
-
-static_assert(fallback_positions.size() == maximum_center_count);
-static_assert(center_count_cumulative_probabilities.size() + 1U == maximum_center_count);
-static_assert(std::ranges::is_sorted(center_count_cumulative_probabilities));
-static_assert(center_count_cumulative_probabilities.front() > 0.0F &&
-              center_count_cumulative_probabilities.back() < 1.0F);
-static_assert(valid_fallback_positions());
-
-class Random final {
-public:
-  explicit Random(std::uint32_t state) : state_{state == 0U ? fallback_random_state : state} {}
-
-  [[nodiscard]] std::uint32_t bits() {
-    state_ ^= state_ << 13U;
-    state_ ^= state_ >> 17U;
-    state_ ^= state_ << 5U;
-    return state_;
-  }
-
-  [[nodiscard]] float unit() { return static_cast<float>(bits() >> 8U) * (1.0F / 16777216.0F); }
-
-  [[nodiscard]] float range(Bounds bounds) { return bounds.minimum + bounds.span() * unit(); }
-
-private:
-  std::uint32_t state_;
-};
-
-[[nodiscard]] std::uint32_t browser_random_state() {
-  return static_cast<std::uint32_t>(EM_ASM_INT({
+[[nodiscard]] double random_start_offset() {
+  const auto bits = static_cast<std::uint32_t>(EM_ASM_INT({
     var value = new Uint32Array(1);
     if (window.crypto && window.crypto.getRandomValues) {
       window.crypto.getRandomValues(value);
@@ -196,366 +117,130 @@ private:
     }
     return (Math.random() * 4294967296) | 0;
   }));
+  return static_cast<double>(bits) / 4294967296.0 * maximum_start_offset_seconds;
 }
 
-// Quintic value noise supplies a continuous, non-looping force target. Each
-// source owns a separate seed and correlation time; no per-frame randomness or
-// authored animation period is involved.
-class SmoothNoise final {
+// The scene's time. It advances by real elapsed time, but a long pause, such as
+// a hidden tab, moves it by at most one frame step.
+class SceneClock final {
 public:
-  struct Configuration final {
-    std::uint32_t seed;
-    float correlation_time;
-  };
-
-  SmoothNoise() = default;
-  explicit SmoothNoise(Configuration configuration)
-      : seed_{configuration.seed == 0U ? fallback_random_state : configuration.seed},
-        correlation_time_{configuration.correlation_time} {}
-
-  [[nodiscard]] float sample(double time) const {
-    const auto coordinate = time / static_cast<double>(correlation_time_);
-    const auto lattice = static_cast<std::uint64_t>(std::floor(coordinate));
-    const auto fraction = static_cast<float>(coordinate - std::floor(coordinate));
-    const auto blend =
-        fraction * fraction * fraction * (fraction * (fraction * 6.0F - 15.0F) + 10.0F);
-    return std::lerp(value_at(lattice), value_at(lattice + 1U), blend);
-  }
-
-private:
-  [[nodiscard]] float value_at(std::uint64_t lattice) const {
-    auto value =
-        seed_ ^ static_cast<std::uint32_t>(lattice) ^ static_cast<std::uint32_t>(lattice >> 32U);
-    value += 0x9E3779B9U;
-    value = (value ^ (value >> 16U)) * 0x21F0AAADU;
-    value = (value ^ (value >> 15U)) * 0x735A2D97U;
-    value ^= value >> 15U;
-    return static_cast<float>(value >> 8U) * (2.0F / 16777216.0F) - 1.0F;
-  }
-
-  std::uint32_t seed_{fallback_random_state};
-  float correlation_time_{1.0F};
-};
-
-struct TimeStep final {
-  double time;
-  float duration;
-};
-
-// A damped oscillator driven by noise toward its equilibrium, softly held
-// inside its range.
-struct ScalarMotion final {
-  float value;
-  float velocity;
-  float equilibrium;
-  Bounds range;
-  float drive;
-  float restoring;
-  float damping;
-  SmoothNoise noise;
-
-  void integrate(TimeStep step) {
-    const auto acceleration = drive * noise.sample(step.time) - restoring * (value - equilibrium) -
-                              damping * velocity +
-                              boundary_stiffness * 2.0F * range.overshoot_correction(value);
-    velocity += acceleration * step.duration;
-    value += velocity * step.duration;
-
-    const auto safety_margin = 0.25F * range.span();
-    value = std::clamp(value, range.minimum - safety_margin, range.maximum + safety_margin);
-  }
-};
-
-struct AngularMotion final {
-  float orientation;
-  float velocity;
-  float drive;
-  float damping;
-  SmoothNoise noise;
-
-  void integrate(TimeStep step) {
-    const auto acceleration = drive * noise.sample(step.time) - damping * velocity;
-    velocity += acceleration * step.duration;
-    orientation += velocity * step.duration;
-    if (orientation < 0.0F || orientation >= tau) {
-      orientation = std::fmod(orientation, tau);
-      if (orientation < 0.0F) {
-        orientation += tau;
-      }
-    }
-  }
-};
-
-struct PlanarMotion final {
-  Vec2 position;
-  Vec2 velocity;
-  SmoothNoise noise_x;
-  SmoothNoise noise_y;
-  float drive;
-  float damping;
-
-  [[nodiscard]] Vec2 acceleration(double time, Bounds boundary_x) const {
-    const Vec2 noise{noise_x.sample(time), noise_y.sample(time)};
-    const Vec2 containment{
-        boundary_stiffness * boundary_x.overshoot_correction(position.x),
-        boundary_stiffness * boundary_y.overshoot_correction(position.y),
-    };
-    return noise * drive + containment - velocity * damping;
-  }
-
-  void integrate(Vec2 acceleration, float duration) {
-    velocity += acceleration * duration;
-    const auto speed_squared = length_squared(velocity);
-    if (speed_squared > maximum_drift_speed * maximum_drift_speed) {
-      velocity *= maximum_drift_speed / std::sqrt(speed_squared);
-    }
-    position += velocity * duration;
-  }
-};
-
-// Declaration order is also the order in which random parameters are drawn.
-struct Singularity final {
-  PlanarMotion drift;
-  ScalarMotion strength;
-  AngularMotion rotation;
-  ScalarMotion anisotropy;
-  ScalarMotion influence_radius;
-};
-
-struct ScalarRequest final {
-  float equilibrium;
-  Bounds range;
-  Bounds drive;
-  Bounds restoring;
-  Bounds damping;
-  Bounds correlation_time;
-};
-
-// Draws motion parameters, giving every noise source its own channel.
-class MotionSampler final {
-public:
-  explicit MotionSampler(Random &random) : random_{random} {}
-
-  [[nodiscard]] float range(Bounds bounds) { return random_.range(bounds); }
-
-  [[nodiscard]] SmoothNoise noise(Bounds correlation_time) {
-    // The channel offset further separates already independent time scales.
-    const auto channel_offset = static_cast<float>(next_channel_++) * 0.137F;
-    return SmoothNoise{SmoothNoise::Configuration{
-        .seed = random_.bits(),
-        .correlation_time = random_.range(correlation_time) + channel_offset,
-    }};
-  }
-
-  [[nodiscard]] ScalarMotion scalar(const ScalarRequest &request) {
-    const auto span = request.range.span();
-    return ScalarMotion{
-        .value = std::clamp(request.equilibrium + range({-0.06F, 0.06F}) * span,
-                            request.range.minimum, request.range.maximum),
-        .velocity = range({-0.002F, 0.002F}) * span,
-        .equilibrium = request.equilibrium,
-        .range = request.range,
-        .drive = range(request.drive),
-        .restoring = range(request.restoring),
-        .damping = range(request.damping),
-        .noise = noise(request.correlation_time),
-    };
-  }
-
-  [[nodiscard]] Singularity singularity(Vec2 placement) {
-    return Singularity{
-        .drift =
-            PlanarMotion{
-                .position = (placement * 2.0F - Vec2{1.0F, 1.0F}) * field_domain_scale,
-                .velocity = Vec2{range({-0.0035F, 0.0035F}), range({-0.0035F, 0.0035F})},
-                .noise_x = noise({8.0F, 18.0F}),
-                .noise_y = noise({10.0F, 23.0F}),
-                .drive = range({0.0030F, 0.0058F}),
-                .damping = range({0.24F, 0.40F}),
-            },
-        .strength = scalar({
-            .equilibrium = range({0.40F, 0.88F}),
-            .range = {0.26F, 0.98F},
-            .drive = {0.0018F, 0.0038F},
-            .restoring = {0.016F, 0.030F},
-            .damping = {0.16F, 0.28F},
-            .correlation_time = {13.0F, 31.0F},
-        }),
-        .rotation =
-            AngularMotion{
-                .orientation = range({0.0F, tau}),
-                .velocity = range({-0.0040F, 0.0040F}),
-                .drive = range({0.0013F, 0.0032F}),
-                .damping = range({0.11F, 0.22F}),
-                .noise = noise({17.0F, 39.0F}),
-            },
-        .anisotropy = scalar({
-            .equilibrium = range({0.78F, 1.34F}),
-            .range = {0.62F, 1.58F},
-            .drive = {0.0018F, 0.0042F},
-            .restoring = {0.013F, 0.026F},
-            .damping = {0.14F, 0.25F},
-            .correlation_time = {16.0F, 36.0F},
-        }),
-        .influence_radius = scalar({
-            .equilibrium = range({0.068F, 0.105F}),
-            .range = {0.052F, 0.128F},
-            .drive = {0.00016F, 0.00036F},
-            .restoring = {0.018F, 0.034F},
-            .damping = {0.16F, 0.28F},
-            .correlation_time = {19.0F, 43.0F},
-        }),
-    };
-  }
-
-private:
-  Random &random_;
-  std::size_t next_channel_{};
-};
-
-class FieldDynamics final {
-public:
-  [[nodiscard]] static FieldDynamics random(const FieldLayout &layout) {
-    Random random{browser_random_state()};
-    const auto count = sample_center_count(random);
-    const auto placements = sample_placements(random, count, layout.placement_x);
-
-    MotionSampler sampler{random};
-    FieldDynamics dynamics{count, layout.boundary_x};
-    for (const auto [singularity, placement] :
-         std::views::zip(dynamics.active(), std::span{placements}.first(count))) {
-      singularity = sampler.singularity(placement);
-    }
-    dynamics.refresh_uniforms();
-    return dynamics;
-  }
+  explicit SceneClock(double start_seconds) : seconds_{start_seconds} {}
 
   void advance(double elapsed_seconds) {
-    auto remaining = static_cast<float>(std::clamp(elapsed_seconds, 0.0, maximum_frame_step));
-    while (remaining > 0.0F) {
-      const auto step = std::min(remaining, maximum_integration_step);
-      integrate(step);
-      remaining -= step;
-    }
-    refresh_uniforms();
+    seconds_ += std::clamp(elapsed_seconds, 0.0, maximum_frame_step);
   }
 
-  void set_layout(const FieldLayout &layout) { boundary_x_ = layout.boundary_x; }
-
-  [[nodiscard]] const GLfloat *positions() const { return position_values_.data(); }
-  [[nodiscard]] const GLfloat *parameters() const { return parameter_values_.data(); }
-  [[nodiscard]] GLsizei center_count() const { return static_cast<GLsizei>(center_count_); }
+  [[nodiscard]] GLfloat seconds() const { return static_cast<GLfloat>(seconds_); }
 
 private:
-  using Placements = std::array<Vec2, maximum_center_count>;
-  static constexpr int maximum_placement_attempts = 96;
+  double seconds_;
+};
 
-  FieldDynamics(std::size_t center_count, Bounds boundary_x)
-      : boundary_x_{boundary_x}, center_count_{center_count} {}
+// What the page tells the renderer. Page script writes it in place: the drag
+// since the renderer last looked, in CSS pixels, and how far the page has
+// scrolled, in viewport heights.
+struct PageInput final {
+  float drag_x;
+  float drag_y;
+  float scroll;
+};
 
-  [[nodiscard]] std::span<Singularity> active() {
-    return std::span{singularities_}.first(center_count_);
+// The page script addresses the fields as three consecutive floats.
+static_assert(std::is_standard_layout_v<PageInput>);
+static_assert(offsetof(PageInput, drag_y) == sizeof(float) &&
+              offsetof(PageInput, scroll) == 2 * sizeof(float));
+
+PageInput page_input{};
+
+void listen_to_page(PageInput &input) { listen_to_page_script(&input.drag_x); }
+
+// A unit quaternion, w + xi + yj + zk, for the sculpture's orientation. Turns
+// compose by multiplication, so any orientation is reachable and none is
+// special.
+struct Quaternion final {
+  float w{1.0F};
+  float x{};
+  float y{};
+  float z{};
+
+  // The turn by |angle| radians about the axis along angle.
+  [[nodiscard]] static Quaternion turn(float angle_x, float angle_y, float angle_z) {
+    const auto angle = std::sqrt(angle_x * angle_x + angle_y * angle_y + angle_z * angle_z);
+    if (angle < 0.000001F) {
+      return {};
+    }
+    const auto scale = std::sin(0.5F * angle) / angle;
+    return {.w = std::cos(0.5F * angle),
+            .x = angle_x * scale,
+            .y = angle_y * scale,
+            .z = angle_z * scale};
   }
 
-  [[nodiscard]] static std::size_t sample_center_count(Random &random) {
-    const auto sample = random.unit();
-    const auto below = std::ranges::upper_bound(center_count_cumulative_probabilities, sample);
-    return static_cast<std::size_t>(below - center_count_cumulative_probabilities.begin()) + 1U;
+  friend Quaternion operator*(Quaternion a, Quaternion b) {
+    return {.w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+            .x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            .y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            .z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
   }
 
-  [[nodiscard]] static Placements sample_placements(Random &random, std::size_t center_count,
-                                                    Bounds placement_x) {
-    Placements placements{};
-    for (std::size_t index = 0; index < center_count; ++index) {
-      const auto placement =
-          sample_placement(random, placement_x, std::span{placements}.first(index));
-      if (!placement) {
-        return fallback_placements(placement_x);
-      }
-      placements[index] = *placement;
-    }
-    return placements;
+  [[nodiscard]] float dot(Quaternion other) const {
+    return w * other.w + x * other.x + y * other.y + z * other.z;
   }
 
-  // Stretches the fallback positions horizontally into the available range.
-  [[nodiscard]] static Placements fallback_placements(Bounds placement_x) {
-    Placements placements = fallback_positions;
-    for (auto &placement : placements) {
-      const auto fraction =
-          (placement.x - fallback_placement_x.minimum) / fallback_placement_x.span();
-      placement.x = placement_x.minimum + fraction * placement_x.span();
-    }
-    return placements;
+  [[nodiscard]] Quaternion normalized() const {
+    const auto length = std::sqrt(dot(*this));
+    return {.w = w / length, .x = x / length, .y = y / length, .z = z / length};
   }
 
-  [[nodiscard]] static std::optional<Vec2> sample_placement(Random &random, Bounds placement_x,
-                                                            std::span<const Vec2> placed) {
-    for (auto attempt = 0; attempt < maximum_placement_attempts; ++attempt) {
-      const Vec2 candidate{random.range(placement_x), random.range(placement_y)};
-      if (is_placeable(candidate, placement_x, placed)) {
-        return candidate;
-      }
-    }
-    return std::nullopt;
+  // Part of the way toward another orientation, along the shorter arc.
+  [[nodiscard]] Quaternion toward(Quaternion target, float fraction) const {
+    const auto sign = dot(target) < 0.0F ? -1.0F : 1.0F;
+    return Quaternion{.w = w + (sign * target.w - w) * fraction,
+                      .x = x + (sign * target.x - x) * fraction,
+                      .y = y + (sign * target.y - y) * fraction,
+                      .z = z + (sign * target.z - z) * fraction}
+        .normalized();
   }
 
-  void integrate(float duration) {
-    const auto singularities = active();
-    const TimeStep step{.time = simulation_time_, .duration = duration};
-
-    std::array<Vec2, maximum_center_count> accelerations{};
-    for (std::size_t index = 0; index < singularities.size(); ++index) {
-      accelerations[index] = singularities[index].drift.acceleration(step.time, boundary_x_);
-    }
-
-    constexpr auto interaction_radius_squared = interaction_radius * interaction_radius;
-    for (std::size_t first = 0; first < singularities.size(); ++first) {
-      for (std::size_t second = first + 1U; second < singularities.size(); ++second) {
-        const auto delta =
-            singularities[first].drift.position - singularities[second].drift.position;
-        const auto distance_squared = length_squared(delta);
-        if (distance_squared >= interaction_radius_squared) {
-          continue;
-        }
-
-        const auto distance = std::sqrt(std::max(distance_squared, 0.000001F));
-        const auto proximity = 1.0F - distance / interaction_radius;
-        const auto direction = distance_squared > 0.000001F ? delta / distance : Vec2{1.0F, 0.0F};
-        const auto repulsion = direction * (interaction_strength * proximity * proximity);
-        accelerations[first] += repulsion;
-        accelerations[second] -= repulsion;
-      }
-    }
-
-    for (std::size_t index = 0; index < singularities.size(); ++index) {
-      auto &singularity = singularities[index];
-      singularity.drift.integrate(accelerations[index], duration);
-      singularity.strength.integrate(step);
-      singularity.anisotropy.integrate(step);
-      singularity.influence_radius.integrate(step);
-      singularity.rotation.integrate(step);
-    }
-    simulation_time_ += static_cast<double>(duration);
+  // The rotation matrix, column by column, as GLSL expects it.
+  [[nodiscard]] std::array<GLfloat, 9> matrix() const {
+    return {1.0F - 2.0F * (y * y + z * z), 2.0F * (x * y + w * z),
+            2.0F * (x * z - w * y),        2.0F * (x * y - w * z),
+            1.0F - 2.0F * (x * x + z * z), 2.0F * (y * z + w * x),
+            2.0F * (x * z + w * y),        2.0F * (y * z - w * x),
+            1.0F - 2.0F * (x * x + y * y)};
   }
+};
 
-  void refresh_uniforms() {
-    for (std::size_t index = 0; const auto &singularity : active()) {
-      position_values_[index * 2U] = singularity.drift.position.x;
-      position_values_[index * 2U + 1U] = singularity.drift.position.y;
-      parameter_values_[index * 4U] = singularity.strength.value;
-      parameter_values_[index * 4U + 1U] = singularity.rotation.orientation;
-      parameter_values_[index * 4U + 2U] = singularity.anisotropy.value;
-      parameter_values_[index * 4U + 3U] = singularity.influence_radius.value;
-      ++index;
-    }
+// Radians the sculpture turns per CSS pixel of drag.
+constexpr float turn_per_pixel = 0.007F;
+
+// The view the renderer draws. A drag turns the target orientation about the
+// view's axes: sideways about the vertical, up and down about the horizontal.
+// The drawn orientation eases toward it, so a turn glides to a stop.
+struct View final {
+  Quaternion orientation =
+      Quaternion::turn(0.38F, 0.0F, 0.0F) * Quaternion::turn(0.0F, -0.6F, 0.0F);
+  Quaternion target = orientation;
+  GLfloat scroll{};
+
+  // Takes the page's drag and scroll and reports whether anything visibly changed.
+  bool follow(PageInput &input, double elapsed_seconds) {
+    target = (Quaternion::turn(input.drag_y * turn_per_pixel, input.drag_x * turn_per_pixel, 0.0F) *
+              target)
+                 .normalized();
+    input.drag_x = 0.0F;
+    input.drag_y = 0.0F;
+
+    const auto blend = static_cast<float>(
+        1.0 - std::exp(-12.0 * std::clamp(elapsed_seconds, 0.0, maximum_frame_step)));
+    const auto before = orientation;
+    orientation = orientation.toward(target, blend);
+    const auto turned = 1.0F - std::abs(orientation.dot(before)) > 0.0000001F;
+    const auto scrolled = std::abs(input.scroll - scroll) > 0.0001F;
+    scroll = input.scroll;
+    return turned || scrolled;
   }
-
-  std::array<Singularity, maximum_center_count> singularities_{};
-  std::array<GLfloat, maximum_center_count * 2U> position_values_{};
-  std::array<GLfloat, maximum_center_count * 4U> parameter_values_{};
-  Bounds boundary_x_;
-  std::size_t center_count_;
-  double simulation_time_{};
 };
 
 class CanvasExtent final {
@@ -704,7 +389,7 @@ private:
 
 class Pipeline final {
 public:
-  [[nodiscard]] static std::optional<Pipeline> create(GLsizei center_count) {
+  [[nodiscard]] static std::optional<Pipeline> create() {
     auto vertex_shader = Shader::compile(ShaderStage::vertex, portfolio::shaders::vertex);
     if (!vertex_shader) {
       return std::nullopt;
@@ -735,10 +420,10 @@ public:
 
     const Uniforms uniforms{
         .resolution = glGetUniformLocation(program, "u_resolution"),
-        .poles = glGetUniformLocation(program, "u_poles[0]"),
-        .singularities = glGetUniformLocation(program, "u_singularities[0]"),
-        .center_count = glGetUniformLocation(program, "u_center_count"),
+        .time = glGetUniformLocation(program, "u_time"),
         .text_edge = glGetUniformLocation(program, "u_text_edge"),
+        .orientation = glGetUniformLocation(program, "u_orientation"),
+        .scroll = glGetUniformLocation(program, "u_scroll"),
     };
     if (!uniforms.valid()) {
       emscripten_log(EM_LOG_ERROR, "The shader program is missing required uniforms");
@@ -756,10 +441,9 @@ public:
 
     // This is the renderer's only pipeline, so its program and vertex array stay
     // bound. Blending, culling, depth, and stencil tests start disabled. The
-    // resolution, layout, and field uniforms are set before the first draw.
+    // resolution and layout uniforms are set before the first draw.
     glUseProgram(program);
     glBindVertexArray(vertex_array);
-    glUniform1i(uniforms.center_count, center_count);
     return Pipeline{Handles{.program = program, .vertex_array = vertex_array}, uniforms};
   }
 
@@ -779,17 +463,16 @@ public:
     }
   }
 
-  void set_resolution(const CanvasExtent &extent) const {
+  void set_layout(const CanvasExtent &extent, float text_edge) const {
     glUniform2f(uniforms_.resolution, extent.width_as_float(), extent.height_as_float());
+    glUniform1f(uniforms_.text_edge, text_edge);
   }
 
-  void set_layout(const FieldLayout &layout) const {
-    glUniform1f(uniforms_.text_edge, layout.text_edge);
-  }
-
-  void draw(const FieldDynamics &dynamics) const {
-    glUniform2fv(uniforms_.poles, dynamics.center_count(), dynamics.positions());
-    glUniform4fv(uniforms_.singularities, dynamics.center_count(), dynamics.parameters());
+  void draw(const SceneClock &clock, const View &view) const {
+    glUniform1f(uniforms_.time, clock.seconds());
+    const auto orientation = view.orientation.matrix();
+    glUniformMatrix3fv(uniforms_.orientation, 1, GL_FALSE, orientation.data());
+    glUniform1f(uniforms_.scroll, view.scroll);
     glDrawArrays(GL_TRIANGLES, 0, 3);
   }
 
@@ -801,14 +484,13 @@ private:
 
   struct Uniforms final {
     GLint resolution;
-    GLint poles;
-    GLint singularities;
-    GLint center_count;
+    GLint time;
     GLint text_edge;
+    GLint orientation;
+    GLint scroll;
 
     [[nodiscard]] bool valid() const {
-      return resolution >= 0 && poles >= 0 && singularities >= 0 && center_count >= 0 &&
-             text_edge >= 0;
+      return resolution >= 0 && time >= 0 && text_edge >= 0 && orientation >= 0 && scroll >= 0;
     }
   };
 
@@ -867,13 +549,12 @@ private:
     if (!extent) {
       return std::nullopt;
     }
-    auto dynamics = FieldDynamics::random(FieldLayout::beside(measure_text_edge()));
-    auto pipeline = Pipeline::create(dynamics.center_count());
+    auto pipeline = Pipeline::create();
     if (!pipeline) {
       return std::nullopt;
     }
-    return Renderer{std::move(*context), std::move(*pipeline), dynamics, *extent,
-                    preferred_motion_mode()};
+    return Renderer{std::move(*context), std::move(*pipeline), SceneClock{random_start_offset()},
+                    *extent, preferred_motion_mode()};
   }
 
   [[nodiscard]] bool start() {
@@ -886,17 +567,18 @@ private:
       return false;
     }
 
-    pipeline_.draw(dynamics_);
-    if (motion_mode_ == MotionMode::animated) {
-      last_animation_timestamp_ = emscripten_get_now();
-      emscripten_request_animation_frame_loop(on_animation_frame, this);
-    }
+    listen_to_page(page_input);
+    pipeline_.draw(clock_, view_);
+    // The loop runs even when motion is reduced, so the visitor can still turn
+    // the sculpture, but then it only draws when the view changes.
+    last_animation_timestamp_ = emscripten_get_now();
+    emscripten_request_animation_frame_loop(on_animation_frame, this);
     return true;
   }
 
-  Renderer(WebGlContext context, Pipeline pipeline, const FieldDynamics &dynamics,
-           CanvasExtent extent, MotionMode motion_mode)
-      : context_{std::move(context)}, pipeline_{std::move(pipeline)}, dynamics_{dynamics},
+  Renderer(WebGlContext context, Pipeline pipeline, SceneClock clock, CanvasExtent extent,
+           MotionMode motion_mode)
+      : context_{std::move(context)}, pipeline_{std::move(pipeline)}, clock_{clock},
         extent_{extent}, motion_mode_{motion_mode} {}
 
   [[nodiscard]] bool apply_extent(const CanvasExtent &extent) {
@@ -906,11 +588,8 @@ private:
       return false;
     }
     glViewport(0, 0, extent.width(), extent.height());
-    pipeline_.set_resolution(extent);
     // The text column only moves when the viewport, and so the canvas, resizes.
-    const auto layout = FieldLayout::beside(measure_text_edge());
-    pipeline_.set_layout(layout);
-    dynamics_.set_layout(layout);
+    pipeline_.set_layout(extent, measure_text_edge());
     extent_ = extent;
     return true;
   }
@@ -930,8 +609,13 @@ private:
     auto &renderer = *static_cast<Renderer *>(user_data);
     const auto elapsed_seconds = (timestamp - renderer.last_animation_timestamp_) / 1000.0;
     renderer.last_animation_timestamp_ = timestamp;
-    renderer.dynamics_.advance(elapsed_seconds);
-    renderer.pipeline_.draw(renderer.dynamics_);
+    const auto turned = renderer.view_.follow(page_input, elapsed_seconds);
+    if (renderer.motion_mode_ == MotionMode::animated) {
+      renderer.clock_.advance(elapsed_seconds);
+    } else if (!turned) {
+      return EM_TRUE;
+    }
+    renderer.pipeline_.draw(renderer.clock_, renderer.view_);
     return EM_TRUE;
   }
 
@@ -958,13 +642,14 @@ private:
     renderer.resize_scheduled_ = false;
     if (renderer.resize() == ResizeResult::applied &&
         renderer.motion_mode_ == MotionMode::reduced) {
-      renderer.pipeline_.draw(renderer.dynamics_);
+      renderer.pipeline_.draw(renderer.clock_, renderer.view_);
     }
   }
 
   WebGlContext context_;
   Pipeline pipeline_;
-  FieldDynamics dynamics_;
+  SceneClock clock_;
+  View view_;
   CanvasExtent extent_;
   MotionMode motion_mode_;
   double last_animation_timestamp_{};

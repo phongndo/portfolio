@@ -68,6 +68,7 @@ body {
   scrollbar-width: none;
   border: 1px solid rgb(232 232 228 / 14%);
   border-radius: 12px;
+  touch-action: pan-y pinch-zoom;
 }
 
 .identity p {
@@ -193,7 +194,7 @@ a:focus-visible {
   }
 
   .terminal {
-    margin-top: 4.5rem;
+    margin-top: 46svh;
   }
 }
 
