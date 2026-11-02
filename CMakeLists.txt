@@ -108,6 +108,7 @@ if(EMSCRIPTEN)
   configure_file("${PROJECT_SOURCE_DIR}/web/favicon.svg" "${SITE_DIR}/${FAVICON_SVG_NAME}" COPYONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/favicon.png" "${SITE_DIR}/${FAVICON_PNG_NAME}" COPYONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/_headers" "${SITE_DIR}/_headers" @ONLY)
+  configure_file("${PROJECT_SOURCE_DIR}/web/404.html" "${SITE_DIR}/404.html" @ONLY)
   configure_file(
     "${PROJECT_SOURCE_DIR}/web/apple-touch-icon.png" "${SITE_DIR}/apple-touch-icon.png" COPYONLY
   )
