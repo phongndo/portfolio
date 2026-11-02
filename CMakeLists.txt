@@ -91,7 +91,9 @@ if(EMSCRIPTEN)
       file(WRITE "${SITE_DIR}/${page_file}" "${PAGE}")
     endif()
   endforeach()
-  file(GLOB FONT_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/web/fonts/*.woff2")
+  file(GLOB FONT_FILES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/web/fonts/*.woff2"
+       "${PROJECT_SOURCE_DIR}/web/fonts/*.txt"
+  )
   file(REMOVE_RECURSE "${SITE_DIR}/fonts")
   file(COPY ${FONT_FILES} DESTINATION "${SITE_DIR}/fonts")
   configure_file("${PROJECT_SOURCE_DIR}/web/favicon.svg" "${SITE_DIR}/${FAVICON_SVG_NAME}" COPYONLY)
