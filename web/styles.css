@@ -15,7 +15,7 @@
   color-scheme: dark;
   font-family:
     "Commit Mono", ui-monospace, "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
-  font-size: 12px;
+  font-size: 12.5px;
   font-synthesis: none;
   font-kerning: normal;
   text-rendering: optimizelegibility;
@@ -73,17 +73,31 @@ body {
 .identity p {
   display: flex;
   flex-direction: column;
+  gap: 0.75rem;
   margin: 0;
   line-height: 1.55;
 }
 
+.identity span {
+  margin-left: -0.04em;
+  color: rgb(242 242 238 / 96%);
+  font:
+    italic 2.8rem/1 "New Computer Modern",
+    serif;
+}
+
+.identity time {
+  color: rgb(232 232 228 / 50%);
+  letter-spacing: 0.12em;
+}
+
 .terminal {
   width: min(100%, 42rem);
-  margin-top: clamp(7rem, 12vh, 10rem);
+  margin-top: clamp(4.5rem, 9vh, 7rem);
 }
 
 section + section {
-  margin-top: 2.75rem;
+  margin-top: 2.25rem;
 }
 
 .about p {
@@ -95,7 +109,7 @@ section + section {
 h1,
 h2 {
   margin: 0 0 1.4rem;
-  color: rgb(232 232 228 / 52%);
+  color: rgb(232 232 228 / 58%);
   font: inherit;
 }
 
@@ -111,17 +125,30 @@ ul {
 }
 
 li {
+  padding-left: 2ch;
+  text-indent: -2ch;
+  color: rgb(232 232 228 / 76%);
   overflow-wrap: anywhere;
-  line-height: 1.55;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+li a {
+  color: rgb(242 242 238 / 96%);
+}
+
+.url {
+  color: rgb(232 232 228 / 46%);
+  white-space: nowrap;
 }
 
 li + li {
-  margin-top: 0.65rem;
+  margin-top: 0.75rem;
 }
 
 a {
   color: inherit;
-  text-decoration-color: rgb(232 232 228 / 24%);
+  text-decoration-color: transparent;
   text-underline-offset: 0.2em;
   touch-action: manipulation;
   transition:
@@ -131,8 +158,8 @@ a {
 
 @media (hover: hover) and (pointer: fine) {
   a:hover {
-    color: rgb(232 232 228 / 100%);
-    text-decoration-color: currentcolor;
+    color: rgb(255 255 255);
+    text-decoration-color: rgb(232 232 228 / 50%);
   }
 }
 
@@ -157,8 +184,16 @@ a:focus-visible {
     padding: 2rem;
   }
 
+  .url {
+    display: none;
+  }
+
+  ul {
+    padding: 0;
+  }
+
   .terminal {
-    margin-top: 7rem;
+    margin-top: 4.5rem;
   }
 }
 
