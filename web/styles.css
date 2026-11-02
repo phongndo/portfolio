@@ -1,8 +1,25 @@
+@font-face {
+  font-family: "New Computer Modern";
+  font-style: italic;
+  font-display: swap;
+  src: url("fonts/newcm-italic.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Commit Mono";
+  font-display: swap;
+  src: url("fonts/commit-mono.woff2") format("woff2");
+}
+
 :root {
   color-scheme: dark;
-  font-family: ui-monospace, "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+  font-family:
+    "Commit Mono", ui-monospace, "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
   font-size: 12px;
   font-synthesis: none;
+  font-kerning: normal;
+  text-rendering: optimizelegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
