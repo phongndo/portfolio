@@ -117,4 +117,10 @@ if(EMSCRIPTEN)
   configure_file("${PROJECT_SOURCE_DIR}/web/sitemap.xml" "${SITE_DIR}/sitemap.xml" @ONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/llms.txt" "${SITE_DIR}/llms.txt" COPYONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/og.jpg" "${SITE_DIR}/og.jpg" COPYONLY)
+  # The IndexNow key, proof to search engines that update notices come from this site. The deploy
+  # workflow sends the same key.
+  set(INDEXNOW_KEY "e7c1deba55693f3543af19e2815bbff3")
+  configure_file(
+    "${PROJECT_SOURCE_DIR}/web/${INDEXNOW_KEY}.txt" "${SITE_DIR}/${INDEXNOW_KEY}.txt" COPYONLY
+  )
 endif()

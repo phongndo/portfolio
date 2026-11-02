@@ -29,3 +29,13 @@ jobs:
       - run: >-
           nix develop --command wrangler pages deploy build/web-release/site
           --project-name=phong-computer --branch=main
+      # Tell IndexNow search engines (Bing, Yandex, Seznam, Naver) that the
+      # site changed. A refusal is only a warning; the deploy has succeeded.
+      - run: >-
+          curl --silent --show-error --fail-with-body
+          --request POST https://api.indexnow.org/indexnow
+          --header 'Content-Type: application/json; charset=utf-8'
+          --data '{"host":"phong.computer","key":"e7c1deba55693f3543af19e2815bbff3",
+          "keyLocation":"https://phong.computer/e7c1deba55693f3543af19e2815bbff3.txt",
+          "urlList":["https://phong.computer/","https://phong.computer/llms.txt"]}'
+          || echo "::warning::IndexNow did not accept the update"
