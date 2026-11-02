@@ -25,3 +25,8 @@
 /
   Cache-Control: public, max-age=0, must-revalidate
   Link: </@BUNDLE_NAME@.wasm>; rel=preload; as=fetch; type=application/wasm; crossorigin
+
+# Link previews may load the card from other sites.
+/og.jpg
+  ! Cross-Origin-Resource-Policy
+  Cross-Origin-Resource-Policy: cross-origin

@@ -71,16 +71,15 @@ body {
   touch-action: pan-y pinch-zoom;
 }
 
-.identity p {
+.identity {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  margin: 0;
   line-height: 1.55;
 }
 
-.identity span {
-  margin-left: -0.04em;
+.identity h1 {
+  margin: 0 0 0 -0.04em;
   color: rgb(242 242 238 / 96%);
   font:
     italic 2.8rem/1 "New Computer Modern",
@@ -107,14 +106,12 @@ section + section {
   line-height: 1.65;
 }
 
-h1,
 h2 {
   margin: 0 0 1.4rem;
   color: rgb(232 232 228 / 58%);
   font: inherit;
 }
 
-h1 span,
 h2 span {
   color: rgb(232 232 228 / 28%);
 }

@@ -31,6 +31,15 @@ if(EMSCRIPTEN)
   if(NOT ASSET_VERSION)
     set(ASSET_VERSION dev)
   endif()
+  execute_process(
+    COMMAND git log -1 --format=%cs
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    OUTPUT_VARIABLE SITE_UPDATED
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET
+  )
+  if(NOT SITE_UPDATED)
+    string(TIMESTAMP SITE_UPDATED "%Y-%m-%d" UTC)
+  endif()
 
   set(BUNDLE_NAME "portfolio.${ASSET_VERSION}")
   set(STYLE_NAME "styles.${ASSET_VERSION}.css")
@@ -99,4 +108,9 @@ if(EMSCRIPTEN)
   configure_file("${PROJECT_SOURCE_DIR}/web/favicon.svg" "${SITE_DIR}/${FAVICON_SVG_NAME}" COPYONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/favicon.png" "${SITE_DIR}/${FAVICON_PNG_NAME}" COPYONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/_headers" "${SITE_DIR}/_headers" @ONLY)
+  configure_file(
+    "${PROJECT_SOURCE_DIR}/web/apple-touch-icon.png" "${SITE_DIR}/apple-touch-icon.png" COPYONLY
+  )
+  # For search engines, AI crawlers, and link previews.
+  configure_file("${PROJECT_SOURCE_DIR}/web/og.jpg" "${SITE_DIR}/og.jpg" COPYONLY)
 endif()
