@@ -112,5 +112,8 @@ if(EMSCRIPTEN)
     "${PROJECT_SOURCE_DIR}/web/apple-touch-icon.png" "${SITE_DIR}/apple-touch-icon.png" COPYONLY
   )
   # For search engines, AI crawlers, and link previews.
+  configure_file("${PROJECT_SOURCE_DIR}/web/robots.txt" "${SITE_DIR}/robots.txt" @ONLY)
+  configure_file("${PROJECT_SOURCE_DIR}/web/sitemap.xml" "${SITE_DIR}/sitemap.xml" @ONLY)
+  configure_file("${PROJECT_SOURCE_DIR}/web/llms.txt" "${SITE_DIR}/llms.txt" COPYONLY)
   configure_file("${PROJECT_SOURCE_DIR}/web/og.jpg" "${SITE_DIR}/og.jpg" COPYONLY)
 endif()

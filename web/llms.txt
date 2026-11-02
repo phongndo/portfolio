@@ -1,0 +1,36 @@
+# Phong N Do
+
+> Phong N Do (also written Phong Do) is a math student at the University of
+> California, Davis, an LLVM contributor, and a software engineer who builds
+> developer tools: terminal multiplexers, diff reviewers, syntax
+> highlighters, and agent harnesses, mostly in C++, Rust, Zig, and
+> TypeScript. His site is https://phong.computer/.
+
+## Now
+
+- [LLVM](https://github.com/llvm/llvm-project/pulls?q=is%3Apr+author%3Aphongndo): contributor to the LLVM compiler infrastructure. His patch "[IRNormalizer] Keep memory accesses in program order" was merged into LLVM (https://github.com/llvm/llvm-project/pull/237128), with more on the way.
+- CloveGrowth: contract software engineer.
+- CodeLab at UC Davis: software and infrastructure engineer, building with IBM.
+
+## Projects
+
+- [1harness](https://github.com/phongndo/1harness): one terminal UI for Claude Code, Codex, and OpenCode, with threads that outlive the terminal. TypeScript.
+- [Patch](https://github.com/phongndo/patch): native diff reviewer for macOS, Linux, and Windows. Zig.
+- [Mark](https://github.com/phongndo/mark): fast, keyboard-first Git diff reviewer for the terminal. Rust.
+- [hz](https://github.com/phongndo/hz): fast, isolated copy-on-write workspaces for parallel work by humans and agents. C++.
+- [Syntaxmate](https://github.com/phongndo/syntaxmate): TextMate syntax highlighting library with bundled grammars and themes. Rust.
+- [Frame](https://github.com/phongndo/frame): terminal multiplexer focused on performance and extensibility. C++.
+- [Lemma](https://github.com/phongndo/lemma): agent harness for coding, writing, and research where every part, including the agent loop, is a replaceable plugin. TypeScript.
+- [Petty](https://github.com/phongndo/petty): experimental Electron terminal multiplexer built on libghostty.
+
+## Contact
+
+- [Email](mailto:origin@phongndo.com)
+- [GitHub](https://github.com/phongndo)
+- [LinkedIn](https://www.linkedin.com/in/phongndo/)
+- [X](https://x.com/0xphony)
+- [Instagram](https://instagram.com/23phg)
+
+## About this site
+
+- [Source](https://github.com/phongndo/portfolio): written in C++23 and compiled to WebAssembly. The background is a raymarched 3D slice of a 4D surface that blends Schoen's gyroid with Schwarz's P surface, rendered with WebGL2.

@@ -1,0 +1,29 @@
+# Everyone is welcome here: search engines, AI crawlers, and the datasets
+# models learn from. The major AI crawlers are named so the intent is clear.
+
+# Content signals: this site may be indexed for search, used as input to AI
+# answers, and used to train AI models.
+User-agent: *
+Content-Signal: search=yes,ai-input=yes,ai-train=yes
+Allow: /
+
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: ClaudeBot
+User-agent: Claude-SearchBot
+User-agent: Claude-User
+User-agent: anthropic-ai
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+User-agent: CCBot
+User-agent: meta-externalagent
+User-agent: Amazonbot
+User-agent: cohere-ai
+User-agent: DuckAssistBot
+User-agent: MistralAI-User
+Allow: /
+
+Sitemap: @SITE_URL@sitemap.xml
