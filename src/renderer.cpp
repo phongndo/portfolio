@@ -18,7 +18,7 @@
 // screens, anywhere but a link on narrow ones. On touch screens the page
 // still scrolls vertically, so a sideways swipe turns it. The listeners add
 // the drag, in CSS pixels, to the first two floats at input, which the
-// renderer consumes, and keep the scroll in the third.
+// renderer consumes, keep the scroll in the third, and the grip in the fourth.
 EM_JS(void, listen_to_page_script, (float *input), {
   var base = input >> 2;
   var frame = document.querySelector(".frame");
@@ -47,6 +47,7 @@ EM_JS(void, listen_to_page_script, (float *input), {
         last_x = event.clientX;
         last_y = event.clientY;
         frame.setPointerCapture(dragging);
+        HEAPF32[base + 3] = 1;
         frame.style.cursor = "grabbing";
         frame.style.userSelect = "none";
       });
@@ -64,6 +65,7 @@ EM_JS(void, listen_to_page_script, (float *input), {
   var release = function(event) {
     if (dragging == event.pointerId) {
       dragging = null;
+      HEAPF32[base + 3] = event.type == "pointercancel" ? -1 : 0;
       frame.style.cursor = "";
       frame.style.userSelect = "";
     }
@@ -146,19 +148,29 @@ private:
   double seconds_;
 };
 
+// How a pointer holds the sculpture, as page script writes it: let go, the
+// sculpture coasts on; cancelled, the browser took the gesture, so it stops.
+namespace grip {
+constexpr float released = 0.0F;
+constexpr float held = 1.0F;
+constexpr float cancelled = -1.0F;
+} // namespace grip
+
 // What the page tells the renderer. Page script writes it in place: the drag
-// since the renderer last looked, in CSS pixels, and how far the page has
-// scrolled, in viewport heights.
+// since the renderer last looked, in CSS pixels, how far the page has
+// scrolled, in viewport heights, and the grip.
 struct PageInput final {
   float drag_x;
   float drag_y;
   float scroll;
+  float grip;
 };
 
-// The page script addresses the fields as three consecutive floats.
+// The page script addresses the fields as four consecutive floats.
 static_assert(std::is_standard_layout_v<PageInput>);
 static_assert(offsetof(PageInput, drag_y) == sizeof(float) &&
-              offsetof(PageInput, scroll) == 2 * sizeof(float));
+              offsetof(PageInput, scroll) == 2 * sizeof(float) &&
+              offsetof(PageInput, grip) == 3 * sizeof(float));
 
 PageInput page_input{};
 
@@ -224,26 +236,70 @@ struct Quaternion final {
 
 // Radians the sculpture turns per CSS pixel of drag.
 constexpr float turn_per_pixel = 0.007F;
+// While held, the drag's speed is smoothed over about this many seconds, so a
+// pause before letting go leaves little to coast on.
+constexpr float drag_speed_smoothing_seconds = 0.04F;
+// Once let go, the sculpture coasts at the drag's speed, in CSS pixels per
+// second, at most the maximum, and friction slows it by this fraction per
+// second until it falls below the resting speed.
+constexpr float maximum_coast_speed = 2500.0F;
+constexpr float coast_friction = 1.5F;
+constexpr float resting_coast_speed = 4.0F;
 
 // The view the renderer draws. A drag turns the target orientation about the
 // view's axes: sideways about the vertical, up and down about the horizontal.
-// The drawn orientation eases toward it, so a turn glides to a stop.
+// Let go, the target coasts on and slows under friction. The drawn orientation
+// eases toward it, so a turn glides to a stop.
 struct View final {
   Quaternion orientation =
       Quaternion::turn(0.38F, 0.0F, 0.0F) * Quaternion::turn(0.0F, -0.6F, 0.0F);
   Quaternion target = orientation;
   GLfloat scroll{};
+  // The drag's speed while held, and the coast's once let go, in CSS pixels per second.
+  float speed_x{};
+  float speed_y{};
 
-  // Takes the page's drag and scroll and reports whether anything visibly changed.
-  bool follow(PageInput &input, double elapsed_seconds) {
-    target = (Quaternion::turn(input.drag_y * turn_per_pixel, input.drag_x * turn_per_pixel, 0.0F) *
-              target)
-                 .normalized();
+  // Takes the page's drag and scroll and reports whether anything visibly
+  // changed. Without coasting, a turn stops when the drag does.
+  bool follow(PageInput &input, double elapsed_seconds, bool coasting) {
+    const auto step = static_cast<float>(std::clamp(elapsed_seconds, 0.0, maximum_frame_step));
+    auto drag_x = input.drag_x;
+    auto drag_y = input.drag_y;
     input.drag_x = 0.0F;
     input.drag_y = 0.0F;
+    if (input.grip == grip::cancelled) {
+      input.grip = grip::released;
+      speed_x = 0.0F;
+      speed_y = 0.0F;
+    }
 
-    const auto blend = static_cast<float>(
-        1.0 - std::exp(-12.0 * std::clamp(elapsed_seconds, 0.0, maximum_frame_step)));
+    if (input.grip == grip::held) {
+      if (step > 0.0F) {
+        const auto smoothing = 1.0F - std::exp(-step / drag_speed_smoothing_seconds);
+        speed_x += (drag_x / step - speed_x) * smoothing;
+        speed_y += (drag_y / step - speed_y) * smoothing;
+      }
+    } else if (coasting &&
+               speed_x * speed_x + speed_y * speed_y > resting_coast_speed * resting_coast_speed) {
+      const auto speed = std::sqrt(speed_x * speed_x + speed_y * speed_y);
+      if (speed > maximum_coast_speed) {
+        speed_x *= maximum_coast_speed / speed;
+        speed_y *= maximum_coast_speed / speed;
+      }
+      drag_x += speed_x * step;
+      drag_y += speed_y * step;
+      const auto friction = std::exp(-coast_friction * step);
+      speed_x *= friction;
+      speed_y *= friction;
+    } else {
+      speed_x = 0.0F;
+      speed_y = 0.0F;
+    }
+
+    target = (Quaternion::turn(drag_y * turn_per_pixel, drag_x * turn_per_pixel, 0.0F) * target)
+                 .normalized();
+
+    const auto blend = 1.0F - std::exp(-12.0F * step);
     const auto before = orientation;
     orientation = orientation.toward(target, blend);
     const auto turned = 1.0F - std::abs(orientation.dot(before)) > 0.0000001F;
@@ -624,7 +680,10 @@ private:
     auto &renderer = *static_cast<Renderer *>(user_data);
     const auto elapsed_seconds = (timestamp - renderer.last_animation_timestamp_) / 1000.0;
     renderer.last_animation_timestamp_ = timestamp;
-    const auto turned = renderer.view_.follow(page_input, elapsed_seconds);
+    // Coasting is motion the visitor did not directly make, so it waits on
+    // the motion preference.
+    const auto turned = renderer.view_.follow(page_input, elapsed_seconds,
+                                              renderer.motion_mode_ == MotionMode::animated);
     const auto resting = renderer.narrow_ && renderer.view_.scroll > resting_scroll;
     if (renderer.motion_mode_ == MotionMode::animated && !resting) {
       renderer.clock_.advance(elapsed_seconds);
