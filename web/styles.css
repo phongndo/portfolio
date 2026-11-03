@@ -69,6 +69,7 @@ body {
   border: 1px solid rgb(232 232 228 / 14%);
   border-radius: 12px;
   touch-action: pan-y pinch-zoom;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .identity {

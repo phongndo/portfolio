@@ -15,19 +15,34 @@
 #include <emscripten/html5.h>
 
 // Dragging turns the sculpture: anywhere right of the text column on wide
-// screens, anywhere but a link on narrow ones. On touch screens the page
-// still scrolls vertically, so a sideways swipe turns it. The listeners add
-// the drag, in CSS pixels, to the first two floats at input, which the
-// renderer consumes, keep the scroll in the third, and the grip in the fourth.
-EM_JS(void, listen_to_page_script, (float *input), {
+// screens, anywhere but a link on narrow ones. A mouse takes hold at once.
+// On touch screens the page still has to scroll, so a finger that lands on
+// the sculpture itself, clear of the text, holds it and turns it any way,
+// while one that lands elsewhere turns it only once it swipes sideways and
+// otherwise leaves the browser to scroll. The listeners add the drag, in CSS
+// pixels, to the first two floats at input, which the renderer consumes, keep
+// the scroll in the third, and the grip in the fourth. The renderer keeps the
+// sculpture's outline at outline: its center, as fractions of the canvas's
+// width and height from the upper left, and its radius, as one of the height.
+EM_JS(void, listen_to_page_script, (float *input, const float *outline), {
   var base = input >> 2;
+  var circle = outline >> 2;
   var frame = document.querySelector(".frame");
-  if (!frame) {
+  var canvas = document.querySelector("#background");
+  if (!frame || !canvas) {
     return;
   }
+  // How far, in CSS pixels, a finger moves before its direction counts.
+  var slop = 10;
   var dragging = null;
+  var holding = false;
+  var touch_held = false;
+  var start_x = 0;
+  var start_y = 0;
   var last_x = 0;
   var last_y = 0;
+  var pending_x = 0;
+  var pending_y = 0;
   var turnable = function(event) {
     if (event.target.closest && event.target.closest("a")) {
       return false;
@@ -38,26 +53,61 @@ EM_JS(void, listen_to_page_script, (float *input), {
     }
     return event.clientX > column.getBoundingClientRect().right;
   };
+  var on_sculpture = function(event) {
+    if (event.target.closest && event.target.closest("a, .terminal, .legal")) {
+      return false;
+    }
+    var rect = canvas.getBoundingClientRect();
+    var x = event.clientX - rect.left - HEAPF32[circle] * rect.width;
+    var y = event.clientY - rect.top - HEAPF32[circle + 1] * rect.height;
+    var radius = HEAPF32[circle + 2] * rect.height;
+    return x * x + y * y < radius * radius;
+  };
+  var hold = function() {
+    holding = true;
+    HEAPF32[base] += pending_x;
+    HEAPF32[base + 1] += pending_y;
+    HEAPF32[base + 3] = 1;
+    frame.style.cursor = "grabbing";
+    frame.style.userSelect = "none";
+  };
   frame.addEventListener(
       "pointerdown", function(event) {
-        if (event.button != 0 || !turnable(event)) {
+        if (event.button != 0 || dragging != null || !turnable(event)) {
           return;
         }
         dragging = event.pointerId;
-        last_x = event.clientX;
-        last_y = event.clientY;
+        start_x = last_x = event.clientX;
+        start_y = last_y = event.clientY;
+        pending_x = 0;
+        pending_y = 0;
         frame.setPointerCapture(dragging);
-        HEAPF32[base + 3] = 1;
-        frame.style.cursor = "grabbing";
-        frame.style.userSelect = "none";
+        if (event.pointerType == "mouse" || on_sculpture(event)) {
+          hold();
+        }
       });
   frame.addEventListener(
       "pointermove", function(event) {
         if (dragging == event.pointerId) {
-          HEAPF32[base] += event.clientX - last_x;
-          HEAPF32[base + 1] += event.clientY - last_y;
+          var x = event.clientX - last_x;
+          var y = event.clientY - last_y;
           last_x = event.clientX;
           last_y = event.clientY;
+          if (holding) {
+            HEAPF32[base] += x;
+            HEAPF32[base + 1] += y;
+            return;
+          }
+          // Until a finger shows its direction, its movement is set aside, so
+          // a scroll does not nudge the sculpture before the browser takes it.
+          pending_x += x;
+          pending_y += y;
+          var moved_x = event.clientX - start_x;
+          var moved_y = event.clientY - start_y;
+          if (moved_x * moved_x + moved_y * moved_y > slop * slop &&
+              Math.abs(moved_x) > Math.abs(moved_y)) {
+            hold();
+          }
         } else if (event.pointerType == "mouse") {
           frame.style.cursor = turnable(event) ? "grab" : "";
         }
@@ -65,13 +115,32 @@ EM_JS(void, listen_to_page_script, (float *input), {
   var release = function(event) {
     if (dragging == event.pointerId) {
       dragging = null;
-      HEAPF32[base + 3] = event.type == "pointercancel" ? -1 : 0;
-      frame.style.cursor = "";
-      frame.style.userSelect = "";
+      if (holding) {
+        holding = false;
+        HEAPF32[base + 3] = event.type == "pointercancel" ? -1 : 0;
+        frame.style.cursor = "";
+        frame.style.userSelect = "";
+      }
     }
   };
   frame.addEventListener("pointerup", release);
   frame.addEventListener("pointercancel", release);
+  // A finger held on the sculpture keeps the page from scrolling. A second
+  // finger lets go, so the page can still be pinched to zoom.
+  frame.addEventListener("touchstart",
+                         function(event) {
+                           touch_held = event.touches.length == 1 && turnable(event.touches[0]) &&
+                                        on_sculpture(event.touches[0]);
+                         },
+                         {passive : true});
+  frame.addEventListener("touchmove",
+                         function(event) {
+                           if ((touch_held || holding) && event.touches.length == 1 &&
+                               event.cancelable) {
+                             event.preventDefault();
+                           }
+                         },
+                         {passive : false});
   frame.addEventListener(
       "scroll",
       function() { HEAPF32[base + 2] = frame.scrollTop / Math.max(frame.clientHeight, 1); },
@@ -174,7 +243,63 @@ static_assert(offsetof(PageInput, drag_y) == sizeof(float) &&
 
 PageInput page_input{};
 
-void listen_to_page(PageInput &input) { listen_to_page_script(&input.drag_x); }
+// Where the sculpture's outline sits on the canvas, as page script reads it:
+// its center, as fractions of the canvas's width and height from the upper
+// left, and its radius, as a fraction of the height.
+struct Outline final {
+  float x;
+  float y;
+  float radius;
+};
+
+static_assert(std::is_standard_layout_v<Outline>);
+static_assert(offsetof(Outline, y) == sizeof(float) &&
+              offsetof(Outline, radius) == 2 * sizeof(float));
+
+Outline sculpture_outline{};
+
+void listen_to_page(PageInput &input, const Outline &outline) {
+  listen_to_page_script(&input.drag_x, &outline.x);
+}
+
+// The fragment shader's camera, which looks at the unit sphere around the
+// sculpture from this distance.
+constexpr float camera_distance = 3.3F;
+constexpr float focal_length = 2.05F;
+
+[[nodiscard]] float smoothstep(float edge0, float edge1, float value) {
+  const auto t = std::clamp((value - edge0) / (edge1 - edge0), 0.0F, 1.0F);
+  return t * t * (3.0F - 2.0F * t);
+}
+
+// Where the sculpture sits. Beside the text on wide screens. On narrow ones
+// the text fills the width, so the sculpture sits in the upper half, under
+// the name, sized to the width; the text starts below it and scrolls over it.
+struct Placement final {
+  // From 0 on wide screens to 1 on narrow ones.
+  float narrow;
+  // The center, as fractions of the canvas's width and height from its lower left.
+  float center_x;
+  float center_y;
+  float focal;
+
+  [[nodiscard]] static Placement arrange(float text_edge, float aspect) {
+    const auto narrow = smoothstep(0.62F, 0.80F, text_edge);
+    return {.narrow = narrow,
+            .center_x = std::lerp(0.5F * (text_edge + 1.0F) + 0.02F, 0.5F, narrow),
+            .center_y = std::lerp(0.5F, 0.63F, narrow),
+            .focal = focal_length * std::lerp(1.0F, 1.22F * aspect, narrow)};
+  }
+
+  // The outline of the sphere the sculpture is cut to. The shader measures
+  // the screen in half heights, and the sphere spans an angle whose tangent
+  // is 1 / sqrt(d^2 - 1) from a camera at distance d.
+  [[nodiscard]] Outline outline() const {
+    return {.x = center_x,
+            .y = 1.0F - center_y,
+            .radius = 0.5F * focal / std::sqrt(camera_distance * camera_distance - 1.0F)};
+  }
+};
 
 // A unit quaternion, w + xi + yj + zk, for the sculpture's orientation. Turns
 // compose by multiplication, so any orientation is reachable and none is
@@ -489,6 +614,9 @@ public:
         .resolution = glGetUniformLocation(program, "u_resolution"),
         .time = glGetUniformLocation(program, "u_time"),
         .text_edge = glGetUniformLocation(program, "u_text_edge"),
+        .narrow = glGetUniformLocation(program, "u_narrow"),
+        .center = glGetUniformLocation(program, "u_center"),
+        .focal = glGetUniformLocation(program, "u_focal"),
         .orientation = glGetUniformLocation(program, "u_orientation"),
         .scroll = glGetUniformLocation(program, "u_scroll"),
     };
@@ -530,9 +658,12 @@ public:
     }
   }
 
-  void set_layout(const CanvasExtent &extent, float text_edge) const {
+  void set_layout(const CanvasExtent &extent, float text_edge, const Placement &placement) const {
     glUniform2f(uniforms_.resolution, extent.width_as_float(), extent.height_as_float());
     glUniform1f(uniforms_.text_edge, text_edge);
+    glUniform1f(uniforms_.narrow, placement.narrow);
+    glUniform2f(uniforms_.center, placement.center_x, placement.center_y);
+    glUniform1f(uniforms_.focal, placement.focal);
   }
 
   void draw(const SceneClock &clock, const View &view) const {
@@ -553,11 +684,15 @@ private:
     GLint resolution;
     GLint time;
     GLint text_edge;
+    GLint narrow;
+    GLint center;
+    GLint focal;
     GLint orientation;
     GLint scroll;
 
     [[nodiscard]] bool valid() const {
-      return resolution >= 0 && time >= 0 && text_edge >= 0 && orientation >= 0 && scroll >= 0;
+      return resolution >= 0 && time >= 0 && text_edge >= 0 && narrow >= 0 && center >= 0 &&
+             focal >= 0 && orientation >= 0 && scroll >= 0;
     }
   };
 
@@ -634,7 +769,7 @@ private:
       return false;
     }
 
-    listen_to_page(page_input);
+    listen_to_page(page_input, sculpture_outline);
     pipeline_.draw(clock_, view_);
     // The loop runs even when motion is reduced, so the visitor can still turn
     // the sculpture, but then it only draws when the view changes.
@@ -658,7 +793,10 @@ private:
     // The text column only moves when the viewport, and so the canvas, resizes.
     const auto text_edge = measure_text_edge();
     narrow_ = text_edge > 0.75F;
-    pipeline_.set_layout(extent, text_edge);
+    const auto placement =
+        Placement::arrange(text_edge, extent.width_as_float() / extent.height_as_float());
+    pipeline_.set_layout(extent, text_edge, placement);
+    sculpture_outline = placement.outline();
     extent_ = extent;
     return true;
   }

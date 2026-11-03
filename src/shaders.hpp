@@ -34,6 +34,12 @@ uniform vec2 u_resolution;
 uniform float u_time;
 // The right edge of the left-aligned text column, as a fraction of the width.
 uniform float u_text_edge;
+// Where the renderer placed the sculpture: from 0 beside the text on wide
+// screens to 1 above it on narrow ones, its center as a fraction of the
+// resolution, and the camera's focal length.
+uniform float u_narrow;
+uniform vec2 u_center;
+uniform float u_focal;
 // The sculpture's orientation, a rotation from its own axes to the view's,
 // built from the quaternion the visitor turns by dragging.
 uniform mat3 u_orientation;
@@ -46,8 +52,8 @@ out vec4 fragment_color;
 // thickness in units of F.
 const float frequency = 5.6;
 const float sheet = 0.11;
+// The renderer places the sculpture assuming this camera distance.
 const float camera_distance = 3.3;
-const float focal_length = 2.05;
 const int march_steps = 140;
 
 float gyroid(vec3 point) {
@@ -99,14 +105,9 @@ void main() {
   float tilt_y = 0.50 * sin(0.053 * time + 1.3);
   tilt = vec4(cos(tilt_x), sin(tilt_x), cos(tilt_y), sin(tilt_y));
 
-  // Beside the text on wide screens. On narrow ones the text fills the width,
-  // so the sculpture sits in the upper half, under the name, sized to the
-  // width; the text starts below it and scrolls over it.
-  float narrow = smoothstep(0.62, 0.80, u_text_edge);
-  float aspect = u_resolution.x / u_resolution.y;
-  vec2 center = mix(vec2(0.5 * (u_text_edge + 1.0) + 0.02, 0.5), vec2(0.5, 0.63), narrow);
-  float focal = focal_length * mix(1.0, 1.22 * aspect, narrow);
-  vec2 screen = (gl_FragCoord.xy - center * u_resolution) / (0.5 * u_resolution.y);
+  float narrow = u_narrow;
+  float focal = u_focal;
+  vec2 screen = (gl_FragCoord.xy - u_center * u_resolution) / (0.5 * u_resolution.y);
 
   // The camera looks down -z from +z. Rather than turn the sculpture, carry
   // the camera into the sculpture's own axes, where its surface is defined.
