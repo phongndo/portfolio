@@ -1,6 +1,6 @@
 # Phong N Do
 
-> Phong N Do (also written Phong Do) is a math student at the University of
+> Phong N Do (also written Phong Do) is a computer science student at the University of
 > California, Davis, an LLVM contributor, and a software engineer who builds
 > developer tools: terminal multiplexers, diff reviewers, syntax
 > highlighters, and agent harnesses, mostly in C++, Rust, Zig, and
